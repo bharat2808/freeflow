@@ -148,16 +148,20 @@ final class LocalWhisperTranscriptionService: AudioTranscriber {
     }
 
     private static func resolvePath(_ value: String) -> URL {
-        let expanded = (value as NSString).expandingTildeInPath
+        let requested = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let expanded = (requested as NSString).expandingTildeInPath
         if expanded.contains("/") {
             return URL(fileURLWithPath: expanded).standardizedFileURL
         }
 
         let path = ProcessInfo.processInfo.environment["PATH"] ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-        for directory in path.split(separator: ":") {
-            let candidate = URL(fileURLWithPath: String(directory)).appendingPathComponent(expanded)
-            if FileManager.default.isExecutableFile(atPath: candidate.path) {
-                return candidate.standardizedFileURL
+        let names = expanded.isEmpty ? ["whisper-cli", "whisper-cpp"] : [expanded]
+        for name in names {
+            for directory in path.split(separator: ":") {
+                let candidate = URL(fileURLWithPath: String(directory)).appendingPathComponent(name)
+                if FileManager.default.isExecutableFile(atPath: candidate.path) {
+                    return candidate.standardizedFileURL
+                }
             }
         }
         return URL(fileURLWithPath: expanded).standardizedFileURL
