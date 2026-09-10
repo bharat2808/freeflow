@@ -2,13 +2,18 @@ APP_NAME ?= FreeFlow Dev
 BUNDLE_ID ?= com.zachlatta.freeflow.dev
 BUILD_DIR = build
 APP_BUNDLE = $(BUILD_DIR)/$(APP_NAME).app
-CODESIGN_IDENTITY ?= FreeFlow Dev
 CONTENTS = $(APP_BUNDLE)/Contents
 MACOS_DIR = $(CONTENTS)/MacOS
 empty :=
 space := $(empty) $(empty)
 APP_EXECUTABLE = $(MACOS_DIR)/$(APP_NAME)
 APP_EXECUTABLE_TARGET := $(subst $(space),\ ,$(APP_EXECUTABLE))
+
+# TCC permissions such as Accessibility are tied to the code signature. Use
+# the first local Apple Development identity when one is available so rebuilds
+# keep the same designated requirement; otherwise fall back to ad-hoc signing.
+DEVELOPMENT_IDENTITY := $(shell security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Apple Development:.*\)"/\1/p' | head -n 1)
+CODESIGN_IDENTITY ?= $(if $(DEVELOPMENT_IDENTITY),$(DEVELOPMENT_IDENTITY),-)
 
 SOURCES = $(shell find Sources -name '*.swift' -type f | LC_ALL=C sort)
 TEST_RUNNER = $(BUILD_DIR)/FreeFlowTests

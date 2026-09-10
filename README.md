@@ -33,6 +33,8 @@ FreeFlow Notes is a free Mac dictation and Markdown notes app. It gives you fast
 2. Get a free Groq API key from [groq.com](https://groq.com/)
 3. Hold `Fn` to talk, or tap `Command-Fn` to start and stop dictation. FreeFlow Notes post-processes the transcript into Markdown and opens it in the notes window.
 
+The Makefile automatically signs local builds with the first Apple Development certificate on the Mac when one is available. This keeps macOS Accessibility consent valid across rebuilds. If no development certificate is installed, builds use ad-hoc signing; macOS may then require Accessibility to be removed and added again after each rebuild.
+
 ## Markdown Notes
 
 After setup, the notes window opens automatically. Use the sidebar to browse previous notes or search their contents. Select a note and choose **Move note** to place it in a folder; nested folders such as `Projects/Ideas` are supported. **Preview** renders Markdown, and **Show files** opens the local notes folder. Notes are stored as UUID-named `.md` files under `~/Library/Application Support/FreeFlow Notes/notes`, so they remain portable and editable with any text editor.
