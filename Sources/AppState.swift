@@ -201,6 +201,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private let apiKeyStorageKey = "groq_api_key"
     private let apiBaseURLStorageKey = "api_base_url"
     private let transcriptionModelStorageKey = "transcription_model"
+    private let transcriptionEngineStorageKey = "transcription_engine"
+    private let localWhisperExecutablePathStorageKey = "local_whisper_executable_path"
+    private let localWhisperModelPathStorageKey = "local_whisper_model_path"
     private let transcriptionAPIURLStorageKey = "transcription_api_url"
     private let transcriptionAPIKeyStorageKey = "transcription_api_key"
     private let postProcessingModelStorageKey = "post_processing_model"
@@ -322,6 +325,23 @@ final class AppState: ObservableObject, @unchecked Sendable {
         didSet {
             UserDefaults.standard.set(transcriptionModel, forKey: transcriptionModelStorageKey)
         }
+    }
+
+    @Published var transcriptionEngine: TranscriptionEngine {
+        didSet {
+            UserDefaults.standard.set(transcriptionEngine.rawValue, forKey: transcriptionEngineStorageKey)
+            if transcriptionEngine == .localWhisper {
+                realtimeStreamingEnabled = false
+            }
+        }
+    }
+
+    @Published var localWhisperExecutablePath: String {
+        didSet { UserDefaults.standard.set(localWhisperExecutablePath, forKey: localWhisperExecutablePathStorageKey) }
+    }
+
+    @Published var localWhisperModelPath: String {
+        didSet { UserDefaults.standard.set(localWhisperModelPath, forKey: localWhisperModelPathStorageKey) }
     }
 
     @Published var postProcessingModel: String {
@@ -640,6 +660,11 @@ final class AppState: ObservableObject, @unchecked Sendable {
         let apiKey = Self.loadStoredAPIKey(account: apiKeyStorageKey)
         let apiBaseURL = Self.loadStoredAPIBaseURL(account: "api_base_url")
         let transcriptionModel = UserDefaults.standard.string(forKey: transcriptionModelStorageKey) ?? Self.defaultTranscriptionModel
+        let transcriptionEngine = TranscriptionEngine(
+            rawValue: UserDefaults.standard.string(forKey: transcriptionEngineStorageKey) ?? ""
+        ) ?? .remote
+        let localWhisperExecutablePath = UserDefaults.standard.string(forKey: localWhisperExecutablePathStorageKey) ?? ""
+        let localWhisperModelPath = UserDefaults.standard.string(forKey: localWhisperModelPathStorageKey) ?? ""
         let transcriptionAPIURL = Self.loadOptionalStoredAPIValue(account: transcriptionAPIURLStorageKey)
         let transcriptionAPIKey = Self.loadStoredAPIKey(account: transcriptionAPIKeyStorageKey)
         let postProcessingModel = UserDefaults.standard.string(forKey: postProcessingModelStorageKey) ?? Self.defaultPostProcessingModel
@@ -748,6 +773,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.transcriptionAPIURL = transcriptionAPIURL
         self.transcriptionAPIKey = transcriptionAPIKey
         self.transcriptionModel = transcriptionModel
+        self.transcriptionEngine = transcriptionEngine
+        self.localWhisperExecutablePath = localWhisperExecutablePath
+        self.localWhisperModelPath = localWhisperModelPath
         self.postProcessingModel = postProcessingModel
         self.postProcessingFallbackModel = postProcessingFallbackModel
         self.contextModel = contextModel
@@ -1041,8 +1069,16 @@ final class AppState: ObservableObject, @unchecked Sendable {
         return trimmed.isEmpty ? apiKey : trimmed
     }
 
-    func makeTranscriptionService(noteProcessing: Bool = false) throws -> TranscriptionService {
-        try TranscriptionService(
+    func makeTranscriptionService(noteProcessing: Bool = false) throws -> AudioTranscriber {
+        if transcriptionEngine == .localWhisper {
+            return try LocalWhisperTranscriptionService(
+                executablePath: localWhisperExecutablePath,
+                modelPath: localWhisperModelPath,
+                language: resolvedTranscriptionLanguage,
+                timeoutSeconds: Self.noteProcessingTimeoutSeconds
+            )
+        }
+        return try TranscriptionService(
             apiKey: resolvedTranscriptionAPIKey,
             baseURL: resolvedTranscriptionBaseURL,
             transcriptionModel: transcriptionModel,
@@ -2559,7 +2595,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     /// strict order to avoid paying for both when realtime succeeds.
     private static func resolveRawTranscript(
         realtimeService: RealtimeTranscriptionService?,
-        fileService: TranscriptionService,
+        fileService: AudioTranscriber,
         fileURL: URL
     ) async throws -> String {
         if let realtimeService {
@@ -2581,7 +2617,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     }
 
     private func transcribeFileInChunks(
-        fileService: TranscriptionService,
+        fileService: AudioTranscriber,
         fileURL: URL
     ) async throws -> String {
         let chunkSet = try AudioChunker.split(fileURL: fileURL)
@@ -2992,7 +3028,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     }
 
     private func startRealtimeStreamingIfEnabled() {
-        guard realtimeStreamingEnabled else { return }
+        guard realtimeStreamingEnabled, transcriptionEngine == .remote else { return }
         let trimmedBase = resolvedTranscriptionBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedBase.isEmpty else {
             os_log(.info, log: recordingLog, "realtime streaming requested but base URL is empty — skipping")

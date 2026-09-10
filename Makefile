@@ -19,6 +19,8 @@ SOURCES = $(shell find Sources -name '*.swift' -type f | LC_ALL=C sort)
 TEST_RUNNER = $(BUILD_DIR)/FreeFlowTests
 TEST_PRODUCTION_SOURCES = \
 	Sources/MarkdownNoteStore.swift \
+	Sources/LocalWhisperTranscriptionService.swift \
+	Sources/TranscriptionService.swift \
 	Sources/AppContextService.swift \
 	Sources/AppName.swift \
 	Sources/LLMAPITransport.swift \

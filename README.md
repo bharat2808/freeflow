@@ -90,6 +90,8 @@ FreeFlow can use OpenAI-compatible local or self-hosted providers instead of Gro
 
 Local models are often slower than hosted providers, especially on cold start, long recordings, or busy hardware.
 
+For fully local speech-to-text, open Settings → Provider Settings, change **Transcription Engine** to **Local Whisper**, and choose a `whisper-cli` executable plus a Whisper `.bin` or `.gguf` model. The app runs that executable locally for every audio chunk; no transcription API key is used. The Homebrew `whisper-cpp` package provides `whisper-cli`, and whisper.cpp can use Metal on Apple Silicon. Download a model separately because the package does not include model files.
+
 <details>
   <summary>Configure longer timeouts for local models</summary>
 

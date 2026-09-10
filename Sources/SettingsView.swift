@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import AVFoundation
 import ServiceManagement
 
@@ -75,6 +76,33 @@ struct ProviderSettingsFields: View {
         transcriptionModelDraft = trimmed
         guard appState.transcriptionModel != trimmed else { return }
         appState.transcriptionModel = trimmed
+    }
+
+    private func commitLocalWhisperExecutablePath() {
+        appState.localWhisperExecutablePath = appState.localWhisperExecutablePath.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func commitLocalWhisperModelPath() {
+        appState.localWhisperModelPath = appState.localWhisperModelPath.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func chooseLocalWhisperFile(model: Bool) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+        if model {
+            panel.message = "Choose a local Whisper model file (.bin or .gguf)."
+        } else {
+            panel.message = "Choose the whisper-cli executable."
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if model {
+            appState.localWhisperModelPath = url.path
+        } else {
+            appState.localWhisperExecutablePath = url.path
+        }
     }
 
     private func commitRealtimeStreamingModel() {
@@ -262,6 +290,46 @@ struct ProviderSettingsFields: View {
                 }
             )
 
+            Picker("Transcription Engine", selection: $appState.transcriptionEngine) {
+                ForEach(TranscriptionEngine.allCases) { engine in
+                    Text(engine.title).tag(engine)
+                }
+            }
+            .pickerStyle(.menu)
+
+            if appState.transcriptionEngine == .localWhisper {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Local Whisper configuration")
+                        .font(.caption.weight(.semibold))
+                    Text("Runs whisper.cpp on this Mac. Install or build whisper-cli with Metal support, then select the executable and a downloaded GGML/GGUF model.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    HStack(spacing: 8) {
+                        TextField("whisper-cli path (or command name)", text: $appState.localWhisperExecutablePath)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.body, design: .monospaced))
+                            .onSubmit { commitLocalWhisperExecutablePath() }
+                        Button("Choose…") { chooseLocalWhisperFile(model: false) }
+                            .font(.caption)
+                    }
+
+                    HStack(spacing: 8) {
+                        TextField("Whisper model path (.bin or .gguf)", text: $appState.localWhisperModelPath)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.body, design: .monospaced))
+                            .onSubmit { commitLocalWhisperModelPath() }
+                        Button("Choose…") { chooseLocalWhisperFile(model: true) }
+                            .font(.caption)
+                    }
+
+                    Text("Local transcription does not require a transcription API key. Post-processing still uses the configured LLM provider.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 4)
+            }
+
             VStack(alignment: .leading, spacing: 6) {
                 Text("Transcription Language")
                     .font(.caption.weight(.semibold))
@@ -335,6 +403,7 @@ struct ProviderSettingsFields: View {
                 "Stream audio while recording (realtime)",
                 isOn: $appState.realtimeStreamingEnabled
             )
+            .disabled(appState.transcriptionEngine == .localWhisper)
             Text("Streams audio through the provider's OpenAI-compatible /v1/realtime WebSocket so transcription runs while you speak.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
