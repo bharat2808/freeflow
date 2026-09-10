@@ -9,6 +9,8 @@ enum MarkdownNoteStoreTests {
         do {
             let initial = try store.load()
             TestSupport.expectEqual(initial.count, 0)
+            try store.createFolder("Ideas/Research")
+            TestSupport.expect(store.loadFolders().contains("Ideas/Research"), "Empty folders must persist and be discoverable")
             let note = MarkdownNote(id: UUID(), markdown: "# Synthetic plan\n\n## Tasks\n- [ ] Review draft\n\n**Keep formatting**", modified: Date())
             try store.save(note)
             let reopened = try store.load()

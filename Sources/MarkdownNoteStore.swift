@@ -127,6 +127,35 @@ requires a change. If the instruction is ambiguous, make the smallest reasonable
         }.sorted { $0.modified > $1.modified }
     }
 
+    func loadFolders() -> [String] {
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let urls = FileManager.default.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )?.compactMap { $0 as? URL } ?? []
+        return urls.compactMap { url in
+            guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { return nil }
+            let folder = relativeFolderPath(for: url)
+            return folder.isEmpty ? nil : folder
+        }
+    }
+
+    func createFolder(_ requestedFolder: String) throws {
+        let folder = normalizedFolder(requestedFolder)
+        guard !folder.isEmpty else {
+            throw NSError(
+                domain: NSCocoaErrorDomain,
+                code: NSFileWriteInvalidFileNameError,
+                userInfo: [NSLocalizedDescriptionKey: "Folder name cannot be empty."]
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: directory.appendingPathComponent(folder, isDirectory: true),
+            withIntermediateDirectories: true
+        )
+    }
+
     func save(_ note: MarkdownNote) throws {
         let folder = normalizedFolder(note.folder)
         let folderURL = directory.appendingPathComponent(folder, isDirectory: true)
@@ -188,6 +217,13 @@ requires a change. If the instruction is ambiguous, make the smallest reasonable
         let root = directory.standardizedFileURL.path
         guard parent.hasPrefix(root) else { return "" }
         return normalizedFolder(String(parent.dropFirst(root.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+    }
+
+    private func relativeFolderPath(for url: URL) -> String {
+        let path = url.standardizedFileURL.path
+        let root = directory.standardizedFileURL.path
+        guard path.hasPrefix(root) else { return "" }
+        return normalizedFolder(String(path.dropFirst(root.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/")))
     }
 
     private func normalizedFolder(_ value: String) -> String {
