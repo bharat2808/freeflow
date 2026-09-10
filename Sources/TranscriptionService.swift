@@ -190,10 +190,14 @@ class TranscriptionService {
                 fileSizeBytes(for: fileURL),
                 responseBody
             )
-            throw TranscriptionError.submissionFailed(Self.friendlyHTTPMessage(
+            let baseMessage = Self.friendlyHTTPMessage(
                 status: httpResponse.statusCode,
                 host: baseURL.host
-            ))
+            )
+            let providerDetail = Self.providerErrorDetail(from: responseBody)
+            let modelDetail = "Model: \(transcriptionModel)."
+            let detail = providerDetail.map { " \($0)" } ?? ""
+            throw TranscriptionError.submissionFailed("\(baseMessage)\(detail) \(modelDetail)")
         }
 
         return try parseTranscript(from: data)
@@ -277,6 +281,36 @@ class TranscriptionService {
         default:
             return "Request failed at \(provider) (HTTP \(status))."
         }
+    }
+
+    /// Extract a safe, short message from common OpenAI-compatible error payloads.
+    /// The API key is never included because only the response body is inspected.
+    private static func providerErrorDetail(from responseBody: String) -> String? {
+        guard !responseBody.isEmpty else { return nil }
+
+        if let data = responseBody.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let candidates: [String?] = [
+                (object["error"] as? [String: Any])?["message"] as? String,
+                object["message"] as? String,
+                object["error"] as? String
+            ]
+            if let message = candidates.compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) })
+                .first(where: { !$0.isEmpty }) {
+                return "Provider detail: \(shortenProviderDetail(message))"
+            }
+        }
+
+        let plainText = responseBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !plainText.isEmpty else { return nil }
+        return "Provider detail: \(shortenProviderDetail(plainText))"
+    }
+
+    private static func shortenProviderDetail(_ message: String) -> String {
+        let singleLine = message.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        let limit = 220
+        guard singleLine.count > limit else { return singleLine }
+        return String(singleLine.prefix(limit - 1)) + "…"
     }
 
     private static func transcriptionTimeoutErrorIfNeeded(
