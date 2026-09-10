@@ -83,6 +83,22 @@ final class NotesLibrary: ObservableObject {
         }
     }
 
+    func deleteSelected() {
+        guard let selectedID,
+              let index = notes.firstIndex(where: { $0.id == selectedID }) else { return }
+        let note = notes[index]
+        pendingSaveWorkItems[selectedID]?.cancel()
+        pendingSaveWorkItems[selectedID] = nil
+        do {
+            try store.delete(note)
+            notes.remove(at: index)
+            self.selectedID = nil
+            error = nil
+        } catch {
+            self.error = "Could not delete note: \(error.localizedDescription)"
+        }
+    }
+
     func renameFolder(from oldFolder: String, to newFolder: String) {
         let oldValue = oldFolder.trimmingCharacters(in: .whitespacesAndNewlines)
         let newValue = newFolder.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -110,6 +126,7 @@ struct NotesView: View {
     @State private var destinationFolder = ""
     @State private var showRenameSheet = false
     @State private var renameFolderName = ""
+    @State private var showDeleteConfirmation = false
 
     private var selectedFolder: String? {
         guard let selectedID = library.selectedID else { return nil }
@@ -128,7 +145,17 @@ struct NotesView: View {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(note.title).font(.headline).lineLimit(2)
                                 Text(note.modified, style: .date).font(.caption).foregroundStyle(.secondary)
-                            }.padding(.vertical, 5).tag(note.id)
+                            }
+                            .padding(.vertical, 5)
+                            .tag(note.id)
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    library.selectedID = note.id
+                                    showDeleteConfirmation = true
+                                } label: {
+                                    Label("Delete note", systemImage: "trash")
+                                }
+                            }
                         }
                     }
                 }
@@ -188,7 +215,23 @@ struct NotesView: View {
                 showRenameSheet = true
             } label: { Label("Rename folder", systemImage: "folder.badge.gearshape") }
             .disabled(selectedFolder == nil)
+            Button(role: .destructive) {
+                showDeleteConfirmation = true
+            } label: { Label("Delete note", systemImage: "trash") }
+            .disabled(library.selectedID == nil)
             Button { NotificationCenter.default.post(name: .showSettings, object: nil) } label: { Label("Settings", systemImage: "gear") }
+        }
+        .confirmationDialog(
+            "Delete this note?",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                library.deleteSelected()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently deletes the Markdown file from your notes folder.")
         }
         .sheet(isPresented: $showMoveSheet) {
             VStack(alignment: .leading, spacing: 16) {
