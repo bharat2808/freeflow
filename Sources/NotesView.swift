@@ -5,6 +5,7 @@ final class NotesLibrary: ObservableObject {
     @Published var notes: [MarkdownNote] = []
     @Published var selectedID: UUID?
     @Published var error: String?
+    @Published private(set) var savedFolders: [String] = []
     private let store = MarkdownNoteStore.standard
     private let saveQueue = DispatchQueue(label: "freeflow.notes.save", qos: .utility)
     private var pendingSaveWorkItems: [UUID: DispatchWorkItem] = [:]
@@ -16,8 +17,22 @@ final class NotesLibrary: ObservableObject {
     }
 
     func reload() {
-        do { notes = try store.load(); error = nil }
+        do {
+            notes = try store.load()
+            savedFolders = store.loadFolders()
+            error = nil
+        }
         catch { self.error = "Could not load notes: \(error.localizedDescription)" }
+    }
+
+    func createFolder(_ folder: String) {
+        do {
+            try store.createFolder(folder)
+            savedFolders = store.loadFolders()
+            error = nil
+        } catch {
+            self.error = "Could not create folder: \(error.localizedDescription)"
+        }
     }
 
     @discardableResult
@@ -85,7 +100,7 @@ final class NotesLibrary: ObservableObject {
     }
 
     var folders: [String] {
-        Array(Set(notes.map(\.folder))).sorted { lhs, rhs in
+        Array(Set(notes.map(\.folder)).union(savedFolders)).sorted { lhs, rhs in
             if lhs.isEmpty { return true }
             if rhs.isEmpty { return false }
             return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
@@ -145,6 +160,8 @@ struct NotesView: View {
     @State private var preview = false
     @State private var showMoveSheet = false
     @State private var destinationFolder = ""
+    @State private var showCreateFolderSheet = false
+    @State private var newFolderName = ""
     @State private var showRenameSheet = false
     @State private var renameFolderName = ""
     @State private var selectedFolderForRename: String?
@@ -267,6 +284,10 @@ struct NotesView: View {
         }
         .toolbar {
             Button { library.create("# Untitled note\n\n") } label: { Label("New note", systemImage: "square.and.pencil") }
+            Button {
+                newFolderName = ""
+                showCreateFolderSheet = true
+            } label: { Label("New folder", systemImage: "folder.badge.plus") }
             Button { appState.toggleRecording() } label: {
                 Label(appState.isRecording ? "Stop & save" : "Record note", systemImage: appState.isRecording ? "stop.circle.fill" : "mic.fill")
             }.disabled(appState.isTranscribing)
@@ -328,6 +349,27 @@ struct NotesView: View {
                         library.moveSelected(to: destinationFolder)
                         showMoveSheet = false
                     }.keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(24)
+            .frame(width: 420)
+        }
+        .sheet(isPresented: $showCreateFolderSheet) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("New folder").font(.title2.weight(.semibold))
+                Text("Use a slash for nested folders, such as Projects/Ideas.")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("Folder name", text: $newFolderName)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Spacer()
+                    Button("Cancel") { showCreateFolderSheet = false }
+                    Button("Create") {
+                        library.createFolder(newFolderName)
+                        showCreateFolderSheet = false
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(newFolderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
             .padding(24)
