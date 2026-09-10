@@ -147,6 +147,7 @@ struct NotesView: View {
     @State private var destinationFolder = ""
     @State private var showRenameSheet = false
     @State private var renameFolderName = ""
+    @State private var selectedFolderForRename: String?
     @State private var showDeleteConfirmation = false
 
     private var selectedFolder: String? {
@@ -176,12 +177,30 @@ struct NotesView: View {
                             .padding(.vertical, 5)
                             .tag(note.id)
                             .contextMenu {
+                                Button {
+                                    library.selectedID = note.id
+                                    destinationFolder = note.folder
+                                    showMoveSheet = true
+                                } label: {
+                                    Label("Move note…", systemImage: "folder.badge.arrow.forward")
+                                }
                                 Button(role: .destructive) {
                                     library.selectedID = note.id
                                     showDeleteConfirmation = true
                                 } label: {
                                     Label("Delete note", systemImage: "trash")
                                 }
+                            }
+                        }
+                    }
+                    .contextMenu {
+                        if !folder.isEmpty {
+                            Button {
+                                selectedFolderForRename = folder
+                                renameFolderName = folder
+                                showRenameSheet = true
+                            } label: {
+                                Label("Rename folder…", systemImage: "folder.badge.gearshape")
                             }
                         }
                     }
@@ -272,6 +291,7 @@ struct NotesView: View {
             } label: { Label("Append voice to note", systemImage: "text.append") }
             .disabled(library.selectedID == nil || appState.isRecording || appState.isTranscribing)
             Button {
+                selectedFolderForRename = selectedFolder
                 renameFolderName = selectedFolder ?? ""
                 showRenameSheet = true
             } label: { Label("Rename folder", systemImage: "folder.badge.gearshape") }
@@ -324,9 +344,10 @@ struct NotesView: View {
                     Spacer()
                     Button("Cancel") { showRenameSheet = false }
                     Button("Rename") {
-                        if let selectedFolder {
-                            library.renameFolder(from: selectedFolder, to: renameFolderName)
+                        if let folder = selectedFolderForRename ?? selectedFolder {
+                            library.renameFolder(from: folder, to: renameFolderName)
                         }
+                        selectedFolderForRename = nil
                         showRenameSheet = false
                     }.keyboardShortcut(.defaultAction)
                 }
