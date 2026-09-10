@@ -3,7 +3,11 @@ import os.log
 
 private let transcriptionLog = OSLog(subsystem: "com.zachlatta.freeflow", category: "Transcription")
 
-class TranscriptionService {
+protocol AudioTranscriber {
+    func transcribe(fileURL: URL) async throws -> String
+}
+
+class TranscriptionService: AudioTranscriber {
     private static let modelsSupportingVerboseJSON: Set<String> = [
         // OpenAI's Whisper model supports segment metadata. The newer
         // gpt-4o-transcribe family only supports the plain JSON format.
