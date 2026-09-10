@@ -57,6 +57,8 @@ struct ProviderSettingsFields: View {
     @State private var postProcessingModelDraft: String = ""
     @State private var postProcessingFallbackModelDraft: String = ""
     @State private var contextModelDraft: String = ""
+    @State private var isDownloadingLocalWhisperModel = false
+    @State private var localWhisperDownloadError: String?
     /// Updated by the cooldown timer so warning labels clear at expiry without user interaction.
     @State private var now: Date = Date()
     /// Tracks whether the Settings window is the frontmost active window.
@@ -102,6 +104,26 @@ struct ProviderSettingsFields: View {
             appState.localWhisperModelPath = url.path
         } else {
             appState.localWhisperExecutablePath = url.path
+        }
+    }
+
+    private func downloadBaseLocalWhisperModel() {
+        guard !isDownloadingLocalWhisperModel else { return }
+        isDownloadingLocalWhisperModel = true
+        localWhisperDownloadError = nil
+        Task {
+            do {
+                let url = try await LocalWhisperModelDownloader.downloadBaseEnglishModel()
+                await MainActor.run {
+                    appState.localWhisperModelPath = url.path
+                    isDownloadingLocalWhisperModel = false
+                }
+            } catch {
+                await MainActor.run {
+                    localWhisperDownloadError = "Could not download the Whisper model: \(error.localizedDescription)"
+                    isDownloadingLocalWhisperModel = false
+                }
+            }
         }
     }
 
@@ -321,6 +343,30 @@ struct ProviderSettingsFields: View {
                             .onSubmit { commitLocalWhisperModelPath() }
                         Button("Choose…") { chooseLocalWhisperFile(model: true) }
                             .font(.caption)
+                    }
+
+                    HStack(spacing: 10) {
+                        Button {
+                            downloadBaseLocalWhisperModel()
+                        } label: {
+                            Label(
+                                isDownloadingLocalWhisperModel ? "Downloading…" : "Download base.en model",
+                                systemImage: "arrow.down.circle"
+                            )
+                        }
+                        .disabled(isDownloadingLocalWhisperModel)
+                        if isDownloadingLocalWhisperModel {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                    }
+                    Text("Downloads the standard English model to ~/.cache/whisper (the download is about 142 MB).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let localWhisperDownloadError {
+                        Text(localWhisperDownloadError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
                     }
 
                     Text("Local transcription does not require a transcription API key. Post-processing still uses the configured LLM provider.")

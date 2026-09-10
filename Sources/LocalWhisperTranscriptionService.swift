@@ -1,5 +1,37 @@
 import Foundation
 
+enum LocalWhisperModelDownloader {
+    static let baseEnglishModelURL = URL(
+        string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin?download=true"
+    )!
+
+    static var baseEnglishModelPath: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".cache/whisper/ggml-base.en.bin")
+    }
+
+    static func downloadBaseEnglishModel() async throws -> URL {
+        let destination = baseEnglishModelPath
+        if FileManager.default.fileExists(atPath: destination.path) {
+            return destination
+        }
+
+        let directory = destination.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let (temporaryURL, response) = try await URLSession.shared.download(from: baseEnglishModelURL)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200..<300).contains(httpResponse.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+
+        if FileManager.default.fileExists(atPath: destination.path) {
+            try FileManager.default.removeItem(at: destination)
+        }
+        try FileManager.default.moveItem(at: temporaryURL, to: destination)
+        return destination
+    }
+}
+
 enum LocalWhisperError: LocalizedError {
     case executableNotFound(String)
     case modelNotFound(String)
