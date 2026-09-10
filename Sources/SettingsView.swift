@@ -306,7 +306,7 @@ struct ProviderSettingsFields: View {
                         .foregroundStyle(.secondary)
 
                     HStack(spacing: 8) {
-                        TextField("whisper-cli path (or command name)", text: $appState.localWhisperExecutablePath)
+                        TextField("whisper-cli path (blank auto-detects)", text: $appState.localWhisperExecutablePath)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.body, design: .monospaced))
                             .onSubmit { commitLocalWhisperExecutablePath() }
