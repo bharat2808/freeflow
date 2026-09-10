@@ -132,6 +132,17 @@ private struct TranscriptCommandParsingResult {
     let shouldPressEnterAfterPaste: Bool
 }
 
+fileprivate struct NoteFormattingResult: Sendable {
+    let finalTranscript: String
+    let outcome: AppState.TranscriptProcessingOutcome
+    let prompt: String
+}
+
+enum NoteVoiceAction: Sendable, Equatable {
+    case update
+    case append
+}
+
 private enum CommandInvocation: String {
     case automatic
     case manual
@@ -615,6 +626,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     @Published var lastContextLLMPrompt: String = ""
     @Published var liveNoteTranscript: String = ""
     @Published var noteUpdateTargetID: UUID?
+    @Published var noteVoiceAction: NoteVoiceAction?
     @Published var hasScreenRecordingPermission = false
     @Published var launchAtLogin: Bool {
         didSet { setLaunchAtLogin(launchAtLogin) }
@@ -1849,6 +1861,16 @@ final class AppState: ObservableObject, @unchecked Sendable {
         guard !isRecording, !isTranscribing,
               notesLibrary.notes.contains(where: { $0.id == noteID }) else { return }
         noteUpdateTargetID = noteID
+        noteVoiceAction = .update
+        liveNoteTranscript = ""
+        toggleRecording()
+    }
+
+    func startNoteAppend(noteID: UUID) {
+        guard !isRecording, !isTranscribing,
+              notesLibrary.notes.contains(where: { $0.id == noteID }) else { return }
+        noteUpdateTargetID = noteID
+        noteVoiceAction = .append
         liveNoteTranscript = ""
         toggleRecording()
     }
@@ -1874,6 +1896,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         capturedContext = nil
         currentSessionIntent = .dictation
         noteUpdateTargetID = nil
+        noteVoiceAction = nil
         liveNoteTranscript = ""
         isRecording = false
         errorMessage = nil
@@ -1902,6 +1925,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         activeRecordingTriggerMode = nil
         currentSessionIntent = .dictation
         noteUpdateTargetID = nil
+        noteVoiceAction = nil
         liveNoteTranscript = ""
         isRecording = false
         isTranscribing = false
@@ -2054,6 +2078,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         ) else { return }
         guard ensureMicrophoneAccess() else {
             noteUpdateTargetID = nil
+            noteVoiceAction = nil
             return
         }
         os_log(.info, log: recordingLog, "mic access check passed: %.3fms", (CFAbsoluteTimeGetCurrent() - t0) * 1000)
@@ -2497,7 +2522,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }?.original
     }
 
-    private enum TranscriptProcessingOutcome {
+    fileprivate enum TranscriptProcessingOutcome: Sendable {
         case skippedEmptyRawTranscript
         case voiceMacro(command: String)
         case postProcessingSucceeded
@@ -2710,57 +2735,98 @@ final class AppState: ObservableObject, @unchecked Sendable {
             )
         }
 
-        var sections: [String] = []
-        var prompts: [String] = []
-        var usedFallback = false
-        for (index, chunk) in rawChunks.enumerated() {
-            await MainActor.run {
-                self.statusText = "Formatting note section \(index + 1) of \(rawChunks.count)..."
-                self.debugStatusMessage = "Formatting Markdown section \(index + 1) of \(rawChunks.count)"
+        await MainActor.run {
+            self.statusText = "Formatting note sections in parallel..."
+            self.debugStatusMessage = "Formatting Markdown sections"
+        }
+        let formattedChunks = await withTaskGroup(of: (Int, NoteFormattingResult).self) { group in
+            for (index, chunk) in rawChunks.enumerated() {
+                group.addTask { [self] in
+                    let result = await self.processTranscript(
+                        chunk,
+                        intent: .dictation,
+                        context: context,
+                        postProcessingService: postProcessingService,
+                        customVocabulary: customVocabulary,
+                        customSystemPrompt: basePrompt + "\n\n" + MarkdownNoteStore.chunkSystemPrompt,
+                        outputLanguage: outputLanguage,
+                        preserveExactWording: false
+                    )
+                    return (
+                        index,
+                        NoteFormattingResult(
+                            finalTranscript: result.finalTranscript,
+                            outcome: result.outcome,
+                            prompt: result.prompt
+                        )
+                    )
+                }
             }
-            let result = await processTranscript(
-                chunk,
-                intent: .dictation,
-                context: context,
-                postProcessingService: postProcessingService,
-                customVocabulary: customVocabulary,
-                customSystemPrompt: basePrompt + "\n\n" + MarkdownNoteStore.chunkSystemPrompt,
-                outputLanguage: outputLanguage,
-                preserveExactWording: false
-            )
-            if case .postProcessingFailedFallback = result.outcome { usedFallback = true }
-            if !result.finalTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                sections.append(result.finalTranscript)
+
+            var results = Array<NoteFormattingResult?>(repeating: nil, count: rawChunks.count)
+            for await (index, result) in group {
+                results[index] = result
             }
-            prompts.append(result.prompt)
+            return results.compactMap { $0 }
+        }
+
+        var sections = formattedChunks.compactMap { result -> String? in
+            let trimmed = result.finalTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : result.finalTranscript
+        }
+        var prompts = formattedChunks.map(\.prompt)
+        var usedFallback = formattedChunks.contains {
+            if case .postProcessingFailedFallback = $0.outcome { return true }
+            return false
         }
 
         while sections.count > 1 {
-            var merged: [String] = []
-            var index = 0
-            while index < sections.count {
-                let end = min(index + 2, sections.count)
-                let pair = Array(sections[index..<end]).joined(separator: "\n\n")
-                await MainActor.run {
-                    self.statusText = "Combining Markdown sections..."
-                    self.debugStatusMessage = "Combining Markdown sections"
-                }
-                let result = await processTranscript(
-                    pair,
-                    intent: .dictation,
-                    context: context,
-                    postProcessingService: postProcessingService,
-                    customVocabulary: customVocabulary,
-                    customSystemPrompt: basePrompt + "\n\n" + MarkdownNoteStore.synthesisSystemPrompt,
-                    outputLanguage: outputLanguage,
-                    preserveExactWording: false
-                )
-                if case .postProcessingFailedFallback = result.outcome { usedFallback = true }
-                merged.append(result.finalTranscript)
-                prompts.append(result.prompt)
-                index = end
+            await MainActor.run {
+                self.statusText = "Combining Markdown sections in parallel..."
+                self.debugStatusMessage = "Combining Markdown sections"
             }
-            sections = merged
+            let pairs = stride(from: 0, to: sections.count, by: 2).map { index in
+                let end = min(index + 2, sections.count)
+                return (index, Array(sections[index..<end]).joined(separator: "\n\n"))
+            }
+            let mergedResults = await withTaskGroup(of: (Int, NoteFormattingResult).self) { group in
+                for (index, pair) in pairs {
+                    group.addTask { [self] in
+                        let result = await self.processTranscript(
+                            pair,
+                            intent: .dictation,
+                            context: context,
+                            postProcessingService: postProcessingService,
+                            customVocabulary: customVocabulary,
+                            customSystemPrompt: basePrompt + "\n\n" + MarkdownNoteStore.synthesisSystemPrompt,
+                            outputLanguage: outputLanguage,
+                            preserveExactWording: false
+                        )
+                        return (
+                            index,
+                            NoteFormattingResult(
+                                finalTranscript: result.finalTranscript,
+                                outcome: result.outcome,
+                                prompt: result.prompt
+                            )
+                        )
+                    }
+                }
+
+                var results = Array<NoteFormattingResult?>(repeating: nil, count: pairs.count)
+                for await (index, result) in group {
+                    results[index / 2] = result
+                }
+                return results.compactMap { $0 }
+            }
+            sections = mergedResults.map(\.finalTranscript)
+            prompts.append(contentsOf: mergedResults.map(\.prompt))
+            if mergedResults.contains(where: {
+                if case .postProcessingFailedFallback = $0.outcome { return true }
+                return false
+            }) {
+                usedFallback = true
+            }
         }
 
         return (
@@ -2773,6 +2839,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private func processNoteUpdate(
         instruction: String,
         existingNote: MarkdownNote,
+        action: NoteVoiceAction,
         context: AppContext,
         postProcessingService: PostProcessingService,
         customVocabulary: String
@@ -2784,18 +2851,41 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
         let trimmedCustomPrompt = noteSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let basePrompt = trimmedCustomPrompt.isEmpty ? MarkdownNoteStore.systemPrompt : trimmedCustomPrompt
-        let updatePrompt = basePrompt + "\n\n" + MarkdownNoteStore.updateSystemPrompt
-        let updateInput = """
-        EXISTING_MARKDOWN_NOTE:
-        <note>
-        \(existingNote.markdown)
-        </note>
+        let updatePrompt: String
+        let updateInput: String
+        switch action {
+        case .update:
+            updatePrompt = basePrompt + "\n\n" + MarkdownNoteStore.updateSystemPrompt
+            updateInput = """
+            EXISTING_MARKDOWN_NOTE:
+            <note>
+            \(existingNote.markdown)
+            </note>
 
-        SPOKEN_UPDATE_INSTRUCTION:
-        <instruction>
-        \(trimmedInstruction)
-        </instruction>
-        """
+            SPOKEN_UPDATE_INSTRUCTION:
+            <instruction>
+            \(trimmedInstruction)
+            </instruction>
+            """
+        case .append:
+            updatePrompt = basePrompt + "\n\n" + """
+            Append the spoken transcription to the end of the existing Markdown note.
+            Return only the complete updated Markdown note. Preserve all existing content exactly
+            unless required to add the new material. Format only the new material as Markdown and
+            do not summarize, omit, or invent content.
+            """
+            updateInput = """
+            EXISTING_MARKDOWN_NOTE:
+            <note>
+            \(existingNote.markdown)
+            </note>
+
+            SPOKEN_TRANSCRIPTION_TO_APPEND:
+            <transcription>
+            \(trimmedInstruction)
+            </transcription>
+            """
+        }
 
         do {
             let result = try await postProcessingService.postProcess(
@@ -2826,6 +2916,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         let sessionContext = capturedContext
         let inFlightContextTask = contextCaptureTask
         let noteUpdateTargetID = self.noteUpdateTargetID
+        let noteVoiceAction = self.noteVoiceAction ?? .update
         let noteUpdateTarget = noteUpdateTargetID.flatMap { id in
             notesLibrary.notes.first(where: { $0.id == id })
         }
@@ -2953,14 +3044,18 @@ final class AppState: ObservableObject, @unchecked Sendable {
                         appContext = self.fallbackContextAtStop()
                     }
                     try Task.checkCancellation()
+                    let postProcessingStartedAt = CFAbsoluteTimeGetCurrent()
                     await MainActor.run { [weak self] in
-                        self?.debugStatusMessage = "Running post-processing"
+                        guard let self else { return }
+                        self.statusText = noteUpdateTarget == nil ? "Formatting note..." : "Updating note..."
+                        self.debugStatusMessage = "Running post-processing"
                     }
                     let result: (finalTranscript: String, outcome: TranscriptProcessingOutcome, prompt: String)
                     if let noteUpdateTarget {
                         result = await self.processNoteUpdate(
                             instruction: parsedTranscript.transcript,
                             existingNote: noteUpdateTarget,
+                            action: noteVoiceAction,
                             context: appContext,
                             postProcessingService: postProcessingService,
                             customVocabulary: self.customVocabulary
@@ -2973,6 +3068,12 @@ final class AppState: ObservableObject, @unchecked Sendable {
                             customVocabulary: self.customVocabulary
                         )
                     }
+                    os_log(
+                        .info,
+                        log: recordingLog,
+                        "post-processing finished in %.0fms",
+                        (CFAbsoluteTimeGetCurrent() - postProcessingStartedAt) * 1000
+                    )
                     try Task.checkCancellation()
 
                     await MainActor.run {
@@ -3021,11 +3122,13 @@ final class AppState: ObservableObject, @unchecked Sendable {
                         if trimmedFinalTranscript.isEmpty {
                             self.statusText = "Nothing to transcribe"
                             self.noteUpdateTargetID = nil
+                            self.noteVoiceAction = nil
                         } else if let noteUpdateTarget {
                             let updateFailed = result.outcome.usedRawTranscriptFallback
                             let saved = !updateFailed && self.notesLibrary.update(id: noteUpdateTarget.id, markdown: trimmedFinalTranscript)
                             self.statusText = saved ? "Note updated" : "Note could not be updated"
                             self.noteUpdateTargetID = nil
+                            self.noteVoiceAction = nil
                             NotificationCenter.default.post(name: .showNotes, object: nil)
                         } else {
                             let saved = self.notesLibrary.create(trimmedFinalTranscript)
@@ -3042,6 +3145,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     await MainActor.run {
                         self.transcriptionTask = nil
                         self.noteUpdateTargetID = nil
+                        self.noteVoiceAction = nil
                         self.liveNoteTranscript = ""
                         self.endCriticalDictationActivity()
                     }
@@ -3059,6 +3163,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                         self.transcriptionTask = nil
                         self.transcribingAudioFileName = nil
                         self.noteUpdateTargetID = nil
+                        self.noteVoiceAction = nil
                         self.liveNoteTranscript = ""
                         let userFacingErrorMessage = self.formattedTranscriptionError(error)
                         self.errorMessage = userFacingErrorMessage
