@@ -63,6 +63,27 @@ final class NotesLibrary: ObservableObject {
         saveQueue.asyncAfter(deadline: .now() + 0.25, execute: workItem)
     }
 
+    @discardableResult
+    func update(id: UUID, markdown: String) -> Bool {
+        guard let index = notes.firstIndex(where: { $0.id == id }) else { return false }
+        let updated = MarkdownNote(
+            id: id,
+            markdown: markdown,
+            modified: Date(),
+            folder: notes[index].folder
+        )
+        pendingSaveWorkItems[id]?.cancel()
+        do {
+            try store.save(updated)
+            notes[index] = updated
+            error = nil
+            return true
+        } catch {
+            self.error = "Could not update note: \(error.localizedDescription)"
+            return false
+        }
+    }
+
     var folders: [String] {
         Array(Set(notes.map(\.folder))).sorted { lhs, rhs in
             if lhs.isEmpty { return true }
@@ -134,6 +155,12 @@ struct NotesView: View {
         return folder.isEmpty ? nil : folder
     }
 
+    private var liveTranscript: String {
+        let live = appState.liveNoteTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !live.isEmpty { return live }
+        return appState.lastRawTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     var body: some View {
         NavigationSplitView {
             List(selection: $library.selectedID) {
@@ -167,6 +194,26 @@ struct NotesView: View {
             VStack(alignment: .leading, spacing: 0) {
                 if let error = library.error ?? appState.errorMessage {
                     Text(error).foregroundStyle(.red).padding()
+                }
+                if appState.isRecording || appState.isTranscribing {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(
+                            appState.noteUpdateTargetID == nil ? "Taking note" : "Updating note",
+                            systemImage: appState.isRecording ? "waveform" : "ellipsis.circle"
+                        )
+                        .font(.headline)
+                        .foregroundStyle(.tint)
+                        ScrollView {
+                            Text(liveTranscript.isEmpty ? "Listening…" : liveTranscript)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
+                        .frame(maxHeight: 150)
+                    }
+                    .padding(14)
+                    .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                    .padding(.horizontal, 18)
+                    .padding(.top, 12)
                 }
                 if let note = library.notes.first(where: { $0.id == library.selectedID }) {
                     if preview {
@@ -210,6 +257,12 @@ struct NotesView: View {
                 showMoveSheet = true
             } label: { Label("Move note", systemImage: "folder.badge.arrow.forward") }
             .disabled(library.selectedID == nil)
+            Button {
+                if let selectedID = library.selectedID {
+                    appState.startNoteUpdate(noteID: selectedID)
+                }
+            } label: { Label("Update note from voice", systemImage: "wand.and.stars") }
+            .disabled(library.selectedID == nil || appState.isRecording || appState.isTranscribing)
             Button {
                 renameFolderName = selectedFolder ?? ""
                 showRenameSheet = true
