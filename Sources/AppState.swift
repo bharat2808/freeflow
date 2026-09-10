@@ -651,6 +651,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private var pendingShortcutStartTask: Task<Void, Never>?
     private var pendingShortcutStartMode: RecordingTriggerMode?
     private var realtimeService: RealtimeTranscriptionService?
+    private var localPreviewService: LocalWhisperPreviewSession?
     private var automaticTerminationDisabled = false
     private var activeAudioInterruption: ActiveAudioInterruption?
     private var pendingOverlayDismissToken: UUID?
@@ -2848,6 +2849,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
             guard let self else { return }
             guard let fileURL else {
                 self.isTranscribing = false
+                self.tearDownRealtimeService()
                 self.audioRecorder.cleanup()
                 self.endCriticalDictationActivity()
                 self.errorMessage = "No audio recorded"
@@ -2881,6 +2883,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
             let activeRealtime = self.realtimeService
             self.realtimeService = nil
+            let activeLocalPreview = self.localPreviewService
+            self.localPreviewService = nil
             self.audioRecorder.onPCM16Samples = nil
             self.transcriptionTask?.cancel()
             guard self.isTranscribing else {
@@ -2889,6 +2893,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 }
                 self.transcribingAudioFileName = nil
                 activeRealtime?.cancel()
+                activeLocalPreview?.stop()
                 self.audioRecorder.cleanup()
                 self.endCriticalDictationActivity()
                 self.refreshAvailableMicrophonesIfNeeded()
@@ -2897,6 +2902,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
             self.transcriptionTask = Task {
                 defer {
                     activeRealtime?.cancel()
+                    activeLocalPreview?.stop()
                 }
                 do {
                     let transcriptionService = try self.makeTranscriptionService(noteProcessing: true)
@@ -3139,7 +3145,31 @@ final class AppState: ObservableObject, @unchecked Sendable {
     }
 
     private func startRealtimeStreamingIfEnabled() {
-        guard realtimeStreamingEnabled, transcriptionEngine == .remote else { return }
+        if transcriptionEngine == .localWhisper {
+            do {
+                let service = try LocalWhisperTranscriptionService(
+                    executablePath: localWhisperExecutablePath,
+                    modelPath: localWhisperModelPath,
+                    language: resolvedTranscriptionLanguage,
+                    timeoutSeconds: Self.noteProcessingTimeoutSeconds
+                )
+                let preview = service.makeLivePreviewSession { [weak self] text in
+                    DispatchQueue.main.async {
+                        guard let self, self.isRecording else { return }
+                        self.liveNoteTranscript = text
+                    }
+                }
+                localPreviewService = preview
+                audioRecorder.onPCM16Samples = { [weak preview] data in
+                    preview?.appendPCM16(data)
+                }
+            } catch {
+                os_log(.error, log: recordingLog, "failed to start local Whisper preview: %{public}@", error.localizedDescription)
+            }
+            return
+        }
+
+        guard realtimeStreamingEnabled else { return }
         let trimmedBase = resolvedTranscriptionBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedBase.isEmpty else {
             os_log(.info, log: recordingLog, "realtime streaming requested but base URL is empty — skipping")
@@ -3173,6 +3203,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
         audioRecorder.onPCM16Samples = nil
         realtimeService?.cancel()
         realtimeService = nil
+        localPreviewService?.stop()
+        localPreviewService = nil
     }
 
     private func startContextCapture() {

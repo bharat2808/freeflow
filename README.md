@@ -90,7 +90,7 @@ FreeFlow can use OpenAI-compatible local or self-hosted providers instead of Gro
 
 Local models are often slower than hosted providers, especially on cold start, long recordings, or busy hardware.
 
-For fully local speech-to-text, install `whisper-cpp` with `brew install whisper-cpp`, then open Settings → Provider Settings and change **Transcription Engine** to **Local Whisper**. Choose a `whisper-cli` executable plus a Whisper `.bin` or `.gguf` model. The app runs that executable locally for every audio chunk; no transcription API key is used. The app auto-detects `whisper-cli` and the standard `~/.cache/whisper/ggml-base.en.bin` model when present. whisper.cpp can use Metal on Apple Silicon; download a model separately because the Homebrew package does not include model files.
+For fully local speech-to-text, install `whisper-cpp` with `brew install whisper-cpp`, then open Settings → Provider Settings and change **Transcription Engine** to **Local Whisper**. Choose a `whisper-cli` executable plus a Whisper `.bin` or `.gguf` model. The app runs that executable locally for every audio chunk; no transcription API key is used. While recording, FreeFlow runs short local preview passes and updates the live transcript under the banner; after you stop, it re-transcribes the complete WAV and uses that result for Markdown post-processing. The app auto-detects `whisper-cli` and the standard `~/.cache/whisper/ggml-base.en.bin` model when present. whisper.cpp can use Metal on Apple Silicon; download a model separately because the Homebrew package does not include model files.
 
 <details>
   <summary>Configure longer timeouts for local models</summary>
