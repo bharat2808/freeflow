@@ -247,6 +247,12 @@ final class AppState: ObservableObject, @unchecked Sendable {
     static let defaultContextScreenshotMaxDimension = Int(AppContextService.defaultScreenshotMaxDimension)
     static let contextScreenshotDimensionOptions = [1024, 768, 640, 512]
     static let defaultTranscriptionModel = "whisper-large-v3"
+    static let defaultLocalWhisperExecutablePath = "whisper-cli"
+    static var defaultLocalWhisperModelPath: String {
+        let cacheModel = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".cache/whisper/ggml-base.en.bin")
+        return FileManager.default.fileExists(atPath: cacheModel.path) ? cacheModel.path : ""
+    }
     static let transcriptionLanguageOptions: [(code: String, name: String)] = [
         ("", "Auto-detect"),
         ("en", "English"),
@@ -663,8 +669,10 @@ final class AppState: ObservableObject, @unchecked Sendable {
         let transcriptionEngine = TranscriptionEngine(
             rawValue: UserDefaults.standard.string(forKey: transcriptionEngineStorageKey) ?? ""
         ) ?? .remote
-        let localWhisperExecutablePath = UserDefaults.standard.string(forKey: localWhisperExecutablePathStorageKey) ?? ""
-        let localWhisperModelPath = UserDefaults.standard.string(forKey: localWhisperModelPathStorageKey) ?? ""
+        let localWhisperExecutablePath = UserDefaults.standard.string(forKey: localWhisperExecutablePathStorageKey)
+            ?? Self.defaultLocalWhisperExecutablePath
+        let localWhisperModelPath = UserDefaults.standard.string(forKey: localWhisperModelPathStorageKey)
+            ?? Self.defaultLocalWhisperModelPath
         let transcriptionAPIURL = Self.loadOptionalStoredAPIValue(account: transcriptionAPIURLStorageKey)
         let transcriptionAPIKey = Self.loadStoredAPIKey(account: transcriptionAPIKeyStorageKey)
         let postProcessingModel = UserDefaults.standard.string(forKey: postProcessingModelStorageKey) ?? Self.defaultPostProcessingModel
