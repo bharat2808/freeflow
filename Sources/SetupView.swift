@@ -535,6 +535,12 @@ struct SetupView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
+            Text("If both FreeFlow and FreeFlow Dev appear in System Settings, enable the entry matching the app you launched.")
+                .font(.caption)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
             HStack {
                 Image(systemName: "hand.raised.fill")
                     .frame(width: 24)
