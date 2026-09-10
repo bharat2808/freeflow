@@ -26,6 +26,15 @@ enum LocalWhisperTranscriptionServiceTests {
                 )
                 let transcript = try await service.transcribe(fileURL: audio)
                 TestSupport.expectEqual(transcript, "hello from local whisper")
+
+                let pcm = Data(repeating: 0, count: 8)
+                let wav = LocalWhisperTranscriptionService.makeWAVData(pcm16: pcm, sampleRate: 24_000)
+                TestSupport.expectEqual(String(data: wav.prefix(4), encoding: .ascii), "RIFF")
+                TestSupport.expectEqual(String(data: wav.subdata(in: 8..<12), encoding: .ascii), "WAVE")
+                TestSupport.expectEqual(wav.count, 44 + pcm.count)
+                let previewTranscript = try await service.transcribePCM16(pcm, sampleRate: 24_000)
+                TestSupport.expectEqual(previewTranscript, "hello from local whisper")
+
             } catch {
                 failure = error
             }

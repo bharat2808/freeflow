@@ -1,4 +1,5 @@
 import Foundation
+import os.lock
 
 enum LocalWhisperModelDownloader {
     static let baseEnglishModelURL = URL(
@@ -220,6 +221,50 @@ final class LocalWhisperTranscriptionService: AudioTranscriber {
         }
     }
 
+    /// Transcribes a short in-memory PCM16 snapshot. AudioRecorder emits
+    /// 24 kHz mono PCM16 for realtime consumers, so the snapshot is wrapped
+    /// in a minimal WAV container before invoking whisper-cli.
+    func transcribePCM16(_ samples: Data, sampleRate: Int = 24_000) async throws -> String {
+        guard !samples.isEmpty else { throw LocalWhisperError.emptyTranscript }
+        let temporaryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("freeflow-whisper-preview-\(UUID().uuidString).wav")
+        try Self.makeWAVData(pcm16: samples, sampleRate: sampleRate).write(to: temporaryURL, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+        return try await transcribe(fileURL: temporaryURL)
+    }
+
+    func makeLivePreviewSession(
+        onUpdate: @escaping @Sendable (String) -> Void
+    ) -> LocalWhisperPreviewSession {
+        LocalWhisperPreviewSession(transcriber: self, onUpdate: onUpdate)
+    }
+
+    static func makeWAVData(pcm16: Data, sampleRate: Int) -> Data {
+        let channels: UInt16 = 1
+        let bitsPerSample: UInt16 = 16
+        let bytesPerSample = UInt32(bitsPerSample / 8)
+        let byteRate = UInt32(sampleRate) * UInt32(channels) * bytesPerSample
+        let blockAlign = channels * (bitsPerSample / 8)
+        let dataSize = UInt32(min(UInt64(pcm16.count), UInt64(UInt32.max)))
+
+        var wav = Data()
+        wav.append(contentsOf: Array("RIFF".utf8))
+        wav.appendLittleEndian(UInt32(36) &+ dataSize)
+        wav.append(contentsOf: Array("WAVE".utf8))
+        wav.append(contentsOf: Array("fmt ".utf8))
+        wav.appendLittleEndian(UInt32(16)) // PCM fmt chunk size
+        wav.appendLittleEndian(UInt16(1)) // PCM format
+        wav.appendLittleEndian(channels)
+        wav.appendLittleEndian(UInt32(sampleRate))
+        wav.appendLittleEndian(byteRate)
+        wav.appendLittleEndian(blockAlign)
+        wav.appendLittleEndian(bitsPerSample)
+        wav.append(contentsOf: Array("data".utf8))
+        wav.appendLittleEndian(dataSize)
+        wav.append(pcm16.prefix(Int(dataSize)))
+        return wav
+    }
+
     private func runProcess(fileURL: URL, processBox: ProcessBox) async throws -> String {
         try Task.checkCancellation()
 
@@ -302,5 +347,120 @@ final class LocalWhisperTranscriptionService: AudioTranscriber {
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count > 240 else { return trimmed }
         return String(trimmed.prefix(239)) + "…"
+    }
+}
+
+private extension Data {
+    mutating func appendLittleEndian<T: FixedWidthInteger>(_ value: T) {
+        var littleEndian = value.littleEndian
+        Swift.withUnsafeBytes(of: &littleEndian) { bytes in
+            append(contentsOf: bytes)
+        }
+    }
+}
+
+/// Incremental local Whisper preview used while a note is still recording.
+/// It deliberately treats each result as provisional: the complete recording
+/// is transcribed again after stop, so preview latency never changes the
+/// authoritative note contents.
+final class LocalWhisperPreviewSession: @unchecked Sendable {
+    private let transcriber: LocalWhisperTranscriptionService
+    private let onUpdate: @Sendable (String) -> Void
+    private let stateLock = OSAllocatedUnfairLock(initialState: ())
+    private var audio = Data()
+    private var totalBytesReceived = 0
+    private var lastSubmittedTotalBytes = 0
+    private var processing = false
+    private var pending = false
+    private var stopped = false
+    private var workerTask: Task<Void, Never>?
+
+    private let sampleRate = 24_000
+    private let processEveryFrames = 24_000 * 3
+    private let maxPreviewFrames = 24_000 * 45
+
+    init(
+        transcriber: LocalWhisperTranscriptionService,
+        onUpdate: @escaping @Sendable (String) -> Void
+    ) {
+        self.transcriber = transcriber
+        self.onUpdate = onUpdate
+    }
+
+    func appendPCM16(_ samples: Data) {
+        guard !samples.isEmpty else { return }
+        let snapshot: Data? = stateLock.withLock {
+            guard !stopped else { return nil }
+            audio.append(samples)
+            totalBytesReceived += samples.count
+            let bytesPerFrame = MemoryLayout<Int16>.size
+            let maxBytes = maxPreviewFrames * bytesPerFrame
+            if audio.count > maxBytes {
+                audio.removeFirst(audio.count - maxBytes)
+            }
+            let minimumBytes = processEveryFrames * bytesPerFrame
+            let hasNewAudio = totalBytesReceived - lastSubmittedTotalBytes >= minimumBytes
+            let shouldProcess = audio.count >= minimumBytes && hasNewAudio
+                && !processing
+            if shouldProcess {
+                processing = true
+                lastSubmittedTotalBytes = totalBytesReceived
+                return audio
+            }
+            if processing && hasNewAudio { pending = true }
+            return nil
+        }
+
+        guard let snapshot else { return }
+        workerTask = Task { [weak self] in
+            await self?.process(snapshot)
+        }
+    }
+
+    func stop() {
+        stateLock.withLock {
+            stopped = true
+            pending = false
+            workerTask?.cancel()
+            workerTask = nil
+        }
+    }
+
+    private func process(_ snapshot: Data) async {
+        do {
+            let transcript = try await transcriber.transcribePCM16(snapshot, sampleRate: sampleRate)
+            try Task.checkCancellation()
+            if !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                onUpdate(transcript)
+            }
+        } catch is CancellationError {
+            // Recording cancellation is expected and should not surface as an error.
+        } catch {
+            // Preview failures are non-fatal; the final stop-time transcription
+            // still reports actionable errors to the user.
+        }
+
+        let nextSnapshot: Data? = stateLock.withLock {
+            if stopped {
+                processing = false
+                return nil
+            }
+            let minimumBytes = processEveryFrames * MemoryLayout<Int16>.size
+            if pending,
+               audio.count >= minimumBytes,
+               totalBytesReceived - lastSubmittedTotalBytes >= minimumBytes {
+                pending = false
+                lastSubmittedTotalBytes = totalBytesReceived
+                return audio
+            }
+            processing = false
+            return nil
+        }
+
+        if let nextSnapshot {
+            workerTask = Task { [weak self] in
+                await self?.process(nextSnapshot)
+            }
+        }
     }
 }
