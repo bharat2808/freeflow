@@ -198,7 +198,9 @@ struct NotesView: View {
                 if appState.isRecording || appState.isTranscribing {
                     VStack(alignment: .leading, spacing: 8) {
                         Label(
-                            appState.noteUpdateTargetID == nil ? "Taking note" : "Updating note",
+                            appState.noteUpdateTargetID == nil
+                                ? "Taking note"
+                                : (appState.noteVoiceAction == .append ? "Appending to note" : "Updating note"),
                             systemImage: appState.isRecording ? "waveform" : "ellipsis.circle"
                         )
                         .font(.headline)
@@ -262,6 +264,12 @@ struct NotesView: View {
                     appState.startNoteUpdate(noteID: selectedID)
                 }
             } label: { Label("Update note from voice", systemImage: "wand.and.stars") }
+            .disabled(library.selectedID == nil || appState.isRecording || appState.isTranscribing)
+            Button {
+                if let selectedID = library.selectedID {
+                    appState.startNoteAppend(noteID: selectedID)
+                }
+            } label: { Label("Append voice to note", systemImage: "text.append") }
             .disabled(library.selectedID == nil || appState.isRecording || appState.isTranscribing)
             Button {
                 renameFolderName = selectedFolder ?? ""
