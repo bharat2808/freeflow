@@ -137,13 +137,14 @@ Behavior:
     private let preferredModel: String
     private let preferredFallbackModel: String
     private let instructionExecutionGuardEnabled: Bool
+    private let timeoutSecondsOverride: TimeInterval?
     private let defaultModel = "openai/gpt-oss-20b"
     private let defaultFallbackModel = "qwen/qwen3.6-27b"
     private let defaultModelReasoningEffort = "low"
     private let postProcessingMaxCompletionTokens = 4096
     private var postProcessingTimeoutSeconds: TimeInterval {
         let override = UserDefaults.standard.double(forKey: "post_processing_timeout_seconds")
-        return override > 0 ? override : 20
+        return timeoutSecondsOverride ?? (override > 0 ? override : 20)
     }
 
     init(
@@ -151,13 +152,15 @@ Behavior:
         baseURL: String = "https://api.groq.com/openai/v1",
         preferredModel: String = "",
         preferredFallbackModel: String = "",
-        instructionExecutionGuardEnabled: Bool = true
+        instructionExecutionGuardEnabled: Bool = true,
+        timeoutSecondsOverride: TimeInterval? = nil
     ) {
         self.apiKey = apiKey
         self.baseURL = baseURL
         self.preferredModel = preferredModel.trimmingCharacters(in: .whitespacesAndNewlines)
         self.preferredFallbackModel = preferredFallbackModel.trimmingCharacters(in: .whitespacesAndNewlines)
         self.instructionExecutionGuardEnabled = instructionExecutionGuardEnabled
+        self.timeoutSecondsOverride = timeoutSecondsOverride
     }
 
     func postProcess(

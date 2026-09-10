@@ -216,6 +216,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private let transcriptionLanguageStorageKey = "transcription_language"
     private let selectedMicrophoneStorageKey = "selected_microphone_id"
     private let customSystemPromptStorageKey = "custom_system_prompt"
+    private let noteSystemPromptStorageKey = "note_system_prompt"
     private let customContextPromptStorageKey = "custom_context_prompt"
     private let instructionExecutionGuardEnabledStorageKey = "instruction_execution_guard_enabled"
     private let customSystemPromptLastModifiedStorageKey = "custom_system_prompt_last_modified"
@@ -278,6 +279,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     static let defaultPostProcessingModel = "openai/gpt-oss-20b"
     static let defaultPostProcessingFallbackModel = "qwen/qwen3.6-27b"
     static let defaultContextModel = "qwen/qwen3.6-27b"
+    static let noteProcessingTimeoutSeconds: TimeInterval = 120
     private static let deprecatedDefaultPostProcessingFallbackModel = "meta-llama/llama-4-scout-17b-16e-instruct"
     private static let deprecatedDefaultContextModel = "meta-llama/llama-4-scout-17b-16e-instruct"
     private static let trailingPressEnterCommandPattern = try! NSRegularExpression(
@@ -421,6 +423,12 @@ final class AppState: ObservableObject, @unchecked Sendable {
     @Published var customSystemPrompt: String {
         didSet {
             UserDefaults.standard.set(customSystemPrompt, forKey: customSystemPromptStorageKey)
+        }
+    }
+
+    @Published var noteSystemPrompt: String {
+        didSet {
+            UserDefaults.standard.set(noteSystemPrompt, forKey: noteSystemPromptStorageKey)
         }
     }
 
@@ -661,6 +669,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
             UserDefaults.standard.string(forKey: transcriptionLanguageStorageKey) ?? ""
         )
         let customSystemPrompt = UserDefaults.standard.string(forKey: customSystemPromptStorageKey) ?? ""
+        let noteSystemPrompt = UserDefaults.standard.string(forKey: noteSystemPromptStorageKey) ?? ""
         let customContextPrompt = UserDefaults.standard.string(forKey: customContextPromptStorageKey) ?? ""
         let instructionExecutionGuardEnabled = UserDefaults.standard.object(
             forKey: instructionExecutionGuardEnabledStorageKey
@@ -754,6 +763,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.customVocabulary = customVocabulary
         self.transcriptionLanguage = transcriptionLanguage
         self.customSystemPrompt = customSystemPrompt
+        self.noteSystemPrompt = noteSystemPrompt
         self.customContextPrompt = customContextPrompt
         self.instructionExecutionGuardEnabled = instructionExecutionGuardEnabled
         self.contextScreenshotMaxDimension = contextScreenshotMaxDimension
@@ -1031,12 +1041,13 @@ final class AppState: ObservableObject, @unchecked Sendable {
         return trimmed.isEmpty ? apiKey : trimmed
     }
 
-    func makeTranscriptionService() throws -> TranscriptionService {
+    func makeTranscriptionService(noteProcessing: Bool = false) throws -> TranscriptionService {
         try TranscriptionService(
             apiKey: resolvedTranscriptionAPIKey,
             baseURL: resolvedTranscriptionBaseURL,
             transcriptionModel: transcriptionModel,
-            language: resolvedTranscriptionLanguage
+            language: resolvedTranscriptionLanguage,
+            timeoutSecondsOverride: noteProcessing ? Self.noteProcessingTimeoutSeconds : nil
         )
     }
 
@@ -1773,6 +1784,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
             self?.restoreClipboardIfNeeded(pendingClipboardRestore)
         }
     }
+
+    let notesLibrary = NotesLibrary()
 
     func toggleRecording() {
         os_log(.info, log: recordingLog, "toggleRecording() called, isRecording=%{public}d", isRecording)
@@ -2565,12 +2578,121 @@ final class AppState: ObservableObject, @unchecked Sendable {
         return try await fileService.transcribe(fileURL: fileURL)
     }
 
+    private func transcribeFileInChunks(
+        fileService: TranscriptionService,
+        fileURL: URL
+    ) async throws -> String {
+        let chunkSet = try AudioChunker.split(fileURL: fileURL)
+        defer { chunkSet.cleanup() }
+
+        if chunkSet.urls.count == 1 {
+            await MainActor.run {
+                self.statusText = "Transcribing..."
+                self.debugStatusMessage = "Transcribing audio"
+            }
+            return try await fileService.transcribe(fileURL: fileURL)
+        }
+
+        var transcripts: [String] = []
+        transcripts.reserveCapacity(chunkSet.urls.count)
+        for (index, chunkURL) in chunkSet.urls.enumerated() {
+            try Task.checkCancellation()
+            await MainActor.run {
+                self.statusText = "Transcribing chunk \(index + 1) of \(chunkSet.urls.count)..."
+                self.debugStatusMessage = "Transcribing audio chunk \(index + 1) of \(chunkSet.urls.count)"
+            }
+            transcripts.append(try await fileService.transcribe(fileURL: chunkURL))
+        }
+        return MarkdownNoteStore.mergeTranscripts(transcripts)
+    }
+
+    private func processNoteTranscript(
+        _ rawTranscript: String,
+        context: AppContext,
+        postProcessingService: PostProcessingService,
+        customVocabulary: String
+    ) async -> (finalTranscript: String, outcome: TranscriptProcessingOutcome, prompt: String) {
+        let trimmedCustomPrompt = noteSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let basePrompt = trimmedCustomPrompt.isEmpty ? MarkdownNoteStore.systemPrompt : trimmedCustomPrompt
+        let rawChunks = MarkdownNoteStore.splitText(rawTranscript)
+        guard rawChunks.count > 1 else {
+            return await processTranscript(
+                rawTranscript,
+                intent: .dictation,
+                context: context,
+                postProcessingService: postProcessingService,
+                customVocabulary: customVocabulary,
+                customSystemPrompt: basePrompt,
+                outputLanguage: outputLanguage,
+                preserveExactWording: false
+            )
+        }
+
+        var sections: [String] = []
+        var prompts: [String] = []
+        var usedFallback = false
+        for (index, chunk) in rawChunks.enumerated() {
+            await MainActor.run {
+                self.statusText = "Formatting note section \(index + 1) of \(rawChunks.count)..."
+                self.debugStatusMessage = "Formatting Markdown section \(index + 1) of \(rawChunks.count)"
+            }
+            let result = await processTranscript(
+                chunk,
+                intent: .dictation,
+                context: context,
+                postProcessingService: postProcessingService,
+                customVocabulary: customVocabulary,
+                customSystemPrompt: basePrompt + "\n\n" + MarkdownNoteStore.chunkSystemPrompt,
+                outputLanguage: outputLanguage,
+                preserveExactWording: false
+            )
+            if case .postProcessingFailedFallback = result.outcome { usedFallback = true }
+            if !result.finalTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                sections.append(result.finalTranscript)
+            }
+            prompts.append(result.prompt)
+        }
+
+        while sections.count > 1 {
+            var merged: [String] = []
+            var index = 0
+            while index < sections.count {
+                let end = min(index + 2, sections.count)
+                let pair = Array(sections[index..<end]).joined(separator: "\n\n")
+                await MainActor.run {
+                    self.statusText = "Combining Markdown sections..."
+                    self.debugStatusMessage = "Combining Markdown sections"
+                }
+                let result = await processTranscript(
+                    pair,
+                    intent: .dictation,
+                    context: context,
+                    postProcessingService: postProcessingService,
+                    customVocabulary: customVocabulary,
+                    customSystemPrompt: basePrompt + "\n\n" + MarkdownNoteStore.synthesisSystemPrompt,
+                    outputLanguage: outputLanguage,
+                    preserveExactWording: false
+                )
+                if case .postProcessingFailedFallback = result.outcome { usedFallback = true }
+                merged.append(result.finalTranscript)
+                prompts.append(result.prompt)
+                index = end
+            }
+            sections = merged
+        }
+
+        return (
+            sections.first ?? "",
+            usedFallback ? .postProcessingFailedFallback : .postProcessingSucceeded,
+            prompts.joined(separator: "\n\n")
+        )
+    }
+
     private func stopAndTranscribe() {
         cancelPendingShortcutStart()
         cancelRecordingInitializationTimer()
         shortcutSessionController.reset()
         activeRecordingTriggerMode = nil
-        let sessionIntent = currentSessionIntent
         currentSessionIntent = .dictation
         audioRecorder.onRecordingReady = nil
         audioRecorder.onRecordingFailure = nil
@@ -2621,13 +2743,14 @@ final class AppState: ObservableObject, @unchecked Sendable {
             self.statusText = "Transcribing..."
             self.debugStatusMessage = "Transcribing audio"
 
-        let postProcessingService = PostProcessingService(
-            apiKey: apiKey,
-            baseURL: apiBaseURL,
-            preferredModel: postProcessingModel,
-            preferredFallbackModel: postProcessingFallbackModel,
-            instructionExecutionGuardEnabled: instructionExecutionGuardEnabled
-        )
+            let postProcessingService = PostProcessingService(
+                apiKey: apiKey,
+                baseURL: apiBaseURL,
+                preferredModel: postProcessingModel,
+                preferredFallbackModel: postProcessingFallbackModel,
+                instructionExecutionGuardEnabled: instructionExecutionGuardEnabled,
+                timeoutSecondsOverride: Self.noteProcessingTimeoutSeconds
+            )
 
             let activeRealtime = self.realtimeService
             self.realtimeService = nil
@@ -2649,16 +2772,33 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     activeRealtime?.cancel()
                 }
                 do {
-                    let transcriptionService = try self.makeTranscriptionService()
-                    async let transcript = Self.resolveRawTranscript(
-                        realtimeService: activeRealtime,
-                        fileService: transcriptionService,
-                        fileURL: transcriptionFileURL
-                    )
-                    let rawTranscript = try await transcript
+                    let transcriptionService = try self.makeTranscriptionService(noteProcessing: true)
+                    let rawTranscript: String
+                    if let activeRealtime {
+                        do {
+                            rawTranscript = try await withTaskCancellationHandler {
+                                try await activeRealtime.commitAndAwaitFinal()
+                            } onCancel: {
+                                activeRealtime.cancel()
+                            }
+                        } catch is CancellationError {
+                            throw CancellationError()
+                        } catch {
+                            try Task.checkCancellation()
+                            rawTranscript = try await self.transcribeFileInChunks(
+                                fileService: transcriptionService,
+                                fileURL: transcriptionFileURL
+                            )
+                        }
+                    } else {
+                        rawTranscript = try await self.transcribeFileInChunks(
+                            fileService: transcriptionService,
+                            fileURL: transcriptionFileURL
+                        )
+                    }
                     let parsedTranscript = Self.parseTranscriptCommands(
                         from: rawTranscript,
-                        pressEnterCommandEnabled: self.isPressEnterVoiceCommandEnabled
+                        pressEnterCommandEnabled: false
                     )
                     try Task.checkCancellation()
                     // Capture the parsed raw transcript as lastTranscript before
@@ -2683,15 +2823,11 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     await MainActor.run { [weak self] in
                         self?.debugStatusMessage = "Running post-processing"
                     }
-                    let result = await self.processTranscript(
+                    let result = await self.processNoteTranscript(
                         parsedTranscript.transcript,
-                        intent: sessionIntent,
                         context: appContext,
                         postProcessingService: postProcessingService,
-                        customVocabulary: self.customVocabulary,
-                        customSystemPrompt: self.customSystemPrompt,
-                        outputLanguage: self.outputLanguage,
-                        preserveExactWording: self.preserveExactWording
+                        customVocabulary: self.customVocabulary
                     )
                     try Task.checkCancellation()
 
@@ -2720,10 +2856,12 @@ final class AppState: ObservableObject, @unchecked Sendable {
                             rawTranscript: trimmedRawTranscript,
                             postProcessedTranscript: trimmedFinalTranscript,
                             postProcessingPrompt: result.prompt,
-                            systemPrompt: Self.resolvedSystemPrompt(self.customSystemPrompt),
+                            systemPrompt: self.noteSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                ? MarkdownNoteStore.systemPrompt
+                                : self.noteSystemPrompt,
                             context: appContext,
                             processingStatus: processingStatus,
-                            intent: sessionIntent,
+                            intent: .dictation,
                             audioFileName: savedAudioFile?.fileName
                         )
                         self.transcriptionTask = nil
@@ -2732,55 +2870,22 @@ final class AppState: ObservableObject, @unchecked Sendable {
                         self.isTranscribing = false
                         self.endCriticalDictationActivity()
                         self.debugStatusMessage = "Done"
-                        let completionStatusText = self.preserveClipboard ? "Pasted at cursor!" : "Copied to clipboard!"
-                        let enterOnlyStatusText = "Pressed Enter"
-                        let shouldPressEnterAfterPaste = parsedTranscript.shouldPressEnterAfterPaste
-
-                        let shouldPersistRawDictationFallback: Bool
-                        switch result.outcome {
-                        case .postProcessingFailedFallback,
-                             .preservedExactWordingTranslationFailedFallback:
-                            shouldPersistRawDictationFallback = !trimmedFinalTranscript.isEmpty
-                        default:
-                            shouldPersistRawDictationFallback = false
-                        }
-
+                        let completionStatusText = "Note saved"
+                        let saveFailureStatusText = "Note could not be saved"
+                        self.clearPendingOverlayDismissToken()
+                        self.overlayManager.dismiss()
                         if trimmedFinalTranscript.isEmpty {
-                            self.statusText = shouldPressEnterAfterPaste ? enterOnlyStatusText : "Nothing to transcribe"
-                            self.clearPendingOverlayDismissToken()
-                            if !self.showPostTranscriptionUpdateReminderIfNeeded() {
-                                self.overlayManager.dismiss()
-                            }
-                            if shouldPressEnterAfterPaste {
-                                self.pressEnterWhenShortcutReleased()
-                            }
+                            self.statusText = "Nothing to transcribe"
                         } else {
-                            self.statusText = completionStatusText
-                            if shouldPersistRawDictationFallback {
-                                self.scheduleOverlayDismissAfterFailureIndicator(after: 2.5)
-                            } else {
-                                self.clearPendingOverlayDismissToken()
-                                if !self.showPostTranscriptionUpdateReminderIfNeeded() {
-                                    self.overlayManager.dismiss()
-                                }
-                            }
-
-                            let pendingClipboardRestore = self.writeTranscriptToPasteboard(trimmedFinalTranscript)
-                            self.pasteAtCursorWhenShortcutReleased {
-                                if shouldPressEnterAfterPaste {
-                                    self.pressEnterAfterPaste {
-                                        self.restoreClipboardIfNeeded(pendingClipboardRestore)
-                                    }
-                                } else {
-                                    self.restoreClipboardIfNeeded(pendingClipboardRestore)
-                                }
-                            }
+                            let saved = self.notesLibrary.create(trimmedFinalTranscript)
+                            self.statusText = saved ? completionStatusText : saveFailureStatusText
+                            NotificationCenter.default.post(name: .showNotes, object: nil)
                         }
 
                         self.audioRecorder.cleanup()
                         self.refreshAvailableMicrophonesIfNeeded()
 
-                        self.scheduleReadyStatusReset(after: 3, matching: [completionStatusText, "Nothing to transcribe", enterOnlyStatusText])
+                        self.scheduleReadyStatusReset(after: 3, matching: [completionStatusText, "Nothing to transcribe", saveFailureStatusText])
                     }
                 } catch is CancellationError {
                     await MainActor.run {
@@ -2818,10 +2923,12 @@ final class AppState: ObservableObject, @unchecked Sendable {
                             rawTranscript: "",
                             postProcessedTranscript: "",
                             postProcessingPrompt: "",
-                            systemPrompt: Self.resolvedSystemPrompt(self.customSystemPrompt),
+                            systemPrompt: self.noteSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                ? MarkdownNoteStore.systemPrompt
+                                : self.noteSystemPrompt,
                             context: resolvedContext,
                             processingStatus: "Error: \(error.localizedDescription)",
-                            intent: sessionIntent,
+                            intent: .dictation,
                             audioFileName: savedAudioFile?.fileName
                         )
                         self.audioRecorder.cleanup()

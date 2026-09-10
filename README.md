@@ -9,8 +9,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/zachlatta/freeflow/releases/latest/download/FreeFlow.dmg"><b>⬇ Download FreeFlow.dmg</b></a><br>
-  <sub>Works on all Macs (Apple Silicon + Intel)</sub>
+  <b>FreeFlow Notes fork</b><br>
+  <sub>Build locally with <code>make run</code> on macOS (Apple Silicon + Intel)</sub>
 </p>
 
 ---
@@ -25,13 +25,19 @@
 
 ## Overview
 
-FreeFlow is a free Mac dictation app inspired by [Wispr Flow](https://wisprflow.ai/), [Superwhisper](https://superwhisper.com/), and [Monologue](https://www.monologue.to/). It gives you fast AI transcription, context-aware cleanup, and voice-driven text editing without a monthly subscription.
+FreeFlow Notes is a free Mac dictation and Markdown notes app. It gives you fast AI transcription and context-aware cleanup without a monthly subscription, then saves each completed dictation as a local Markdown note.
 
 ## Quick Start
 
-1. Download the app from above or [click here](https://github.com/zachlatta/freeflow/releases/latest/download/FreeFlow.dmg)
+1. Clone this fork, then run `make run` to build and launch FreeFlow Notes
 2. Get a free Groq API key from [groq.com](https://groq.com/)
-3. Hold `Fn` to talk, or tap `Command-Fn` to start and stop dictation, and have whatever you say pasted into the current text field
+3. Hold `Fn` to talk, or tap `Command-Fn` to start and stop dictation. FreeFlow Notes post-processes the transcript into Markdown and opens it in the notes window.
+
+## Markdown Notes
+
+After setup, the notes window opens automatically. Use the sidebar to browse previous notes or search their contents. Select a note and choose **Move note** to place it in a folder; nested folders such as `Projects/Ideas` are supported. **Preview** renders Markdown, and **Show files** opens the local notes folder. Notes are stored as UUID-named `.md` files under `~/Library/Application Support/FreeFlow Notes/notes`, so they remain portable and editable with any text editor.
+
+The note-taking system prompt is editable in Settings → Prompts → Note-taking Prompt. Recordings longer than 90 seconds are split into ordered WAV chunks with a short overlap at each boundary so words are not cut between requests. The resulting sections are formatted separately and merged in passes so one very long recording can become a single coherent note without exceeding a model request size. Note transcription and formatting requests allow up to two minutes each; the normal dictation timeout remains configurable separately.
 
 ## Features
 

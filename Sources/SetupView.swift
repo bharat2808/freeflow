@@ -420,15 +420,19 @@ struct SetupView: View {
                     )
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("API Key")
+                        Text("Provider API Key")
                             .font(.headline)
-                        SecureField("Paste your API key", text: $apiKeyInput)
+                        SecureField("Paste your provider key", text: $apiKeyInput)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.body, design: .monospaced))
                             .disabled(isValidatingKey)
                             .onChange(of: apiKeyInput) { _ in
                                 keyValidationError = nil
                             }
+
+                        Text("For OpenRouter, paste the sk-or-v1-… key here. The separate transcription key in Advanced Settings is only needed when speech-to-text uses another provider.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
 
                         if let error = keyValidationError {
                             Label(error, systemImage: "xmark.circle.fill")
@@ -576,7 +580,7 @@ struct SetupView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("It needs this permission to see which app you're working in and any in-progress work. Nothing is stored on \(AppName.displayName)'s servers (\(AppName.displayName) doesn't have servers).")
+            Text("This optional permission lets context analysis inspect the active window screenshot. Without it, FreeFlow Notes uses app and window metadata instead. Nothing is stored on \(AppName.displayName)'s servers (\(AppName.displayName) doesn't have servers).")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .font(.callout)
@@ -1092,7 +1096,7 @@ struct SetupView: View {
         case .accessibility:
             return accessibilityGranted
         case .screenRecording:
-            return appState.hasScreenRecordingPermission
+            return true
         case .testTranscription:
             return testPhase == .done && !testTranscript.isEmpty && testError == nil
         default:

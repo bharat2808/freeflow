@@ -4,9 +4,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let appState = AppState()
     var setupWindow: NSWindow?
     private var settingsWindow: NSWindow?
+    private var notesWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NetworkMonitor.shared.start()
+        NotificationCenter.default.addObserver(self, selector: #selector(showNotesWindow), name: .showNotes, object: nil)
 
         NotificationCenter.default.addObserver(
             self,
@@ -24,6 +26,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if !appState.hasCompletedSetup {
             showSetupWindow()
         } else {
+            showNotesWindow()
             appState.startHotkeyMonitoring()
             appState.startAccessibilityPolling()
             Task { @MainActor in
@@ -40,7 +43,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         guard appState.hasCompletedSetup else { return true }
         if !flag {
-            showSettingsWindow()
+            showNotesWindow()
         }
         return true
     }
@@ -79,6 +82,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self.setupWindow = nil
             }
         }
+    }
+
+    @objc private func showNotesWindow() {
+        NSApp.setActivationPolicy(.regular)
+        if notesWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1050, height: 720),
+                                  styleMask: [.titled, .closable, .resizable, .miniaturizable],
+                                  backing: .buffered, defer: false)
+            window.title = "FreeFlow Notes"
+            window.contentView = NSHostingView(rootView: NotesView(library: appState.notesLibrary).environmentObject(appState))
+            window.isReleasedWhenClosed = false
+            window.center()
+            notesWindow = window
+        }
+        notesWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc private func handleShowSettings() {
@@ -166,7 +185,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         appState.hasCompletedSetup = true
         setupWindow?.close()
         setupWindow = nil
-        NSApp.setActivationPolicy(.accessory)
+        showNotesWindow()
         appState.startHotkeyMonitoring()
         appState.startAccessibilityPolling()
         Task { @MainActor in
