@@ -1519,6 +1519,7 @@ struct MicrophoneOptionRow: View {
 struct PromptsSettingsView: View {
     @EnvironmentObject var appState: AppState
     @State private var customSystemPromptInput: String = ""
+    @State private var noteSystemPromptInput: String = ""
     @State private var customContextPromptInput: String = ""
     @FocusState private var customSystemPromptFocused: Bool
     @FocusState private var customContextPromptFocused: Bool
@@ -1544,6 +1545,9 @@ struct PromptsSettingsView: View {
                 SettingsCard("System Prompt", icon: "text.bubble.fill") {
                     systemPromptSection
                 }
+                SettingsCard("Note-taking Prompt", icon: "note.text") {
+                    notePromptSection
+                }
                 SettingsCard("Instruction Guard", icon: "shield.lefthalf.filled") {
                     instructionGuardSection
                 }
@@ -1557,12 +1561,16 @@ struct PromptsSettingsView: View {
             customSystemPromptInput = appState.customSystemPrompt.isEmpty
                 ? PostProcessingService.defaultSystemPrompt
                 : appState.customSystemPrompt
+            noteSystemPromptInput = appState.noteSystemPrompt.isEmpty
+                ? MarkdownNoteStore.systemPrompt
+                : appState.noteSystemPrompt
             customContextPromptInput = appState.customContextPrompt.isEmpty
                 ? AppContextService.defaultContextPrompt
                 : appState.customContextPrompt
         }
         .onDisappear {
             commitCustomSystemPrompt()
+            commitNoteSystemPrompt()
             commitCustomContextPrompt()
         }
     }
@@ -1592,6 +1600,41 @@ struct PromptsSettingsView: View {
         } else if appState.customContextPrompt != trimmed {
             appState.customContextPrompt = trimmed
             appState.customContextPromptLastModified = iso8601DayFormatter.string(from: Date())
+        }
+    }
+
+    private func commitNoteSystemPrompt() {
+        let trimmed = noteSystemPromptInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let defaultTrimmed = MarkdownNoteStore.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        appState.noteSystemPrompt = trimmed == defaultTrimmed ? "" : trimmed
+    }
+
+    private var notePromptSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Controls how dictated speech is structured and saved as Markdown notes. For long recordings, this prompt is applied to each section and to the final merge.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextEditor(text: $noteSystemPromptInput)
+                .font(.system(.body, design: .monospaced))
+                .frame(minHeight: 140, maxHeight: 240)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                )
+
+            HStack {
+                Label(appState.noteSystemPrompt.isEmpty ? "Using default" : "Using custom prompt",
+                      systemImage: appState.noteSystemPrompt.isEmpty ? "checkmark.circle" : "pencil")
+                    .font(.caption)
+                    .foregroundStyle(appState.noteSystemPrompt.isEmpty ? Color.secondary : Color.blue)
+                Spacer()
+                Button("Reset to Default") {
+                    noteSystemPromptInput = MarkdownNoteStore.systemPrompt
+                    appState.noteSystemPrompt = ""
+                }
+                .font(.caption)
+            }
         }
     }
 

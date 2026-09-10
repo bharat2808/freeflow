@@ -18,31 +18,51 @@ class TranscriptionService {
     private let baseURL: URL
     private let transcriptionModel: String
     private let language: String?
+    private let timeoutSecondsOverride: TimeInterval?
     private var transcriptionResponseFormat: String {
         Self.responseFormat(forModel: transcriptionModel)
     }
     private var transcriptionTimeoutSeconds: TimeInterval {
         let override = UserDefaults.standard.double(forKey: "transcription_timeout_seconds")
-        return override > 0 ? override : 20
+        return timeoutSecondsOverride ?? (override > 0 ? override : 20)
     }
 
     init(
         apiKey: String,
         baseURL: String = "https://api.groq.com/openai/v1",
         transcriptionModel: String = "whisper-large-v3",
-        language: String? = nil
+        language: String? = nil,
+        timeoutSecondsOverride: TimeInterval? = nil
     ) throws {
         self.apiKey = apiKey
         self.baseURL = try Self.normalizedBaseURL(from: baseURL)
         let trimmedModel = transcriptionModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.transcriptionModel = trimmedModel.isEmpty ? "whisper-large-v3" : trimmedModel
+        let resolvedModel = trimmedModel.isEmpty ? "whisper-large-v3" : trimmedModel
+        self.transcriptionModel = Self.providerQualifiedModel(resolvedModel, baseURL: self.baseURL)
         let trimmedLanguage = language?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.language = (trimmedLanguage?.isEmpty == false) ? trimmedLanguage : nil
+        self.timeoutSecondsOverride = timeoutSecondsOverride
     }
 
     static func responseFormat(forModel model: String) -> String {
         let normalizedModel = model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return modelsSupportingVerboseJSON.contains(normalizedModel) ? "verbose_json" : "json"
+    }
+
+    private static func providerQualifiedModel(_ model: String, baseURL: URL) -> String {
+        guard let host = baseURL.host?.lowercased(), host == "openrouter.ai" || host.hasSuffix(".openrouter.ai") else {
+            return model
+        }
+        switch model.lowercased() {
+        case "whisper-1":
+            return "openai/whisper-1"
+        case "whisper-large-v3":
+            return "openai/whisper-large-v3"
+        case "whisper-large-v3-turbo":
+            return "openai/whisper-large-v3-turbo"
+        default:
+            return model
+        }
     }
 
     // Validate API key by hitting a lightweight endpoint
