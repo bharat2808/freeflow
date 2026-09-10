@@ -613,6 +613,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
     @Published var lastContextWindowTitle: String = ""
     @Published var lastContextSelectedText: String = ""
     @Published var lastContextLLMPrompt: String = ""
+    @Published var liveNoteTranscript: String = ""
+    @Published var noteUpdateTargetID: UUID?
     @Published var hasScreenRecordingPermission = false
     @Published var launchAtLogin: Bool {
         didSet { setLaunchAtLogin(launchAtLogin) }
@@ -1842,6 +1844,14 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
     }
 
+    func startNoteUpdate(noteID: UUID) {
+        guard !isRecording, !isTranscribing,
+              notesLibrary.notes.contains(where: { $0.id == noteID }) else { return }
+        noteUpdateTargetID = noteID
+        liveNoteTranscript = ""
+        toggleRecording()
+    }
+
     private func handleOverlayStopButtonPressed() {
         guard isRecording, activeRecordingTriggerMode == .toggle else { return }
         stopAndTranscribe()
@@ -1862,6 +1872,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
         contextCaptureTask = nil
         capturedContext = nil
         currentSessionIntent = .dictation
+        noteUpdateTargetID = nil
+        liveNoteTranscript = ""
         isRecording = false
         errorMessage = nil
         debugStatusMessage = "Cancelled"
@@ -1888,6 +1900,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
         shortcutSessionController.reset()
         activeRecordingTriggerMode = nil
         currentSessionIntent = .dictation
+        noteUpdateTargetID = nil
+        liveNoteTranscript = ""
         isRecording = false
         isTranscribing = false
         errorMessage = nil
@@ -2025,6 +2039,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         let t0 = CFAbsoluteTimeGetCurrent()
         os_log(.info, log: recordingLog, "startRecording() entered")
         guard !isRecording && !isTranscribing else { return }
+        liveNoteTranscript = ""
         let scheduledSelectionSnapshot = pendingSelectionSnapshot
         let scheduledManualCommandInvocation = pendingManualCommandInvocation
         cancelPendingShortcutStart()
@@ -2036,7 +2051,10 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 : scheduledManualCommandInvocation,
             startedAt: t0
         ) else { return }
-        guard ensureMicrophoneAccess() else { return }
+        guard ensureMicrophoneAccess() else {
+            noteUpdateTargetID = nil
+            return
+        }
         os_log(.info, log: recordingLog, "mic access check passed: %.3fms", (CFAbsoluteTimeGetCurrent() - t0) * 1000)
         applyAudioInterruptionIfNeeded()
         beginRecording(triggerMode: triggerMode)
@@ -2513,6 +2531,11 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 return "Edit mode failed, using selected text (\(invocation.rawValue))"
             }
         }
+
+        var usedRawTranscriptFallback: Bool {
+            if case .postProcessingFailedFallback = self { return true }
+            return false
+        }
     }
 
     private func processTranscript(
@@ -2636,7 +2659,11 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 self.statusText = "Transcribing..."
                 self.debugStatusMessage = "Transcribing audio"
             }
-            return try await fileService.transcribe(fileURL: fileURL)
+            let transcript = try await fileService.transcribe(fileURL: fileURL)
+            await MainActor.run {
+                self.liveNoteTranscript = transcript
+            }
+            return transcript
         }
 
         var transcripts: [String] = []
@@ -2648,8 +2675,16 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 self.debugStatusMessage = "Transcribing audio chunk \(index + 1) of \(chunkSet.urls.count)"
             }
             transcripts.append(try await fileService.transcribe(fileURL: chunkURL))
+            let partialTranscript = MarkdownNoteStore.mergeTranscripts(transcripts)
+            await MainActor.run {
+                self.liveNoteTranscript = partialTranscript
+            }
         }
-        return MarkdownNoteStore.mergeTranscripts(transcripts)
+        let mergedTranscript = MarkdownNoteStore.mergeTranscripts(transcripts)
+        await MainActor.run {
+            self.liveNoteTranscript = mergedTranscript
+        }
+        return mergedTranscript
     }
 
     private func processNoteTranscript(
@@ -2734,6 +2769,48 @@ final class AppState: ObservableObject, @unchecked Sendable {
         )
     }
 
+    private func processNoteUpdate(
+        instruction: String,
+        existingNote: MarkdownNote,
+        context: AppContext,
+        postProcessingService: PostProcessingService,
+        customVocabulary: String
+    ) async -> (finalTranscript: String, outcome: TranscriptProcessingOutcome, prompt: String) {
+        let trimmedInstruction = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedInstruction.isEmpty else {
+            return (existingNote.markdown, .skippedEmptyRawTranscript, "")
+        }
+
+        let trimmedCustomPrompt = noteSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let basePrompt = trimmedCustomPrompt.isEmpty ? MarkdownNoteStore.systemPrompt : trimmedCustomPrompt
+        let updatePrompt = basePrompt + "\n\n" + MarkdownNoteStore.updateSystemPrompt
+        let updateInput = """
+        EXISTING_MARKDOWN_NOTE:
+        <note>
+        \(existingNote.markdown)
+        </note>
+
+        SPOKEN_UPDATE_INSTRUCTION:
+        <instruction>
+        \(trimmedInstruction)
+        </instruction>
+        """
+
+        do {
+            let result = try await postProcessingService.postProcess(
+                transcript: updateInput,
+                context: context,
+                customVocabulary: customVocabulary,
+                customSystemPrompt: updatePrompt,
+                outputLanguage: outputLanguage
+            )
+            return (result.transcript, .postProcessingSucceeded, result.prompt)
+        } catch {
+            os_log(.error, log: recordingLog, "Note update failed: %{public}@", error.localizedDescription)
+            return (existingNote.markdown, .postProcessingFailedFallback, "")
+        }
+    }
+
     private func stopAndTranscribe() {
         cancelPendingShortcutStart()
         cancelRecordingInitializationTimer()
@@ -2747,6 +2824,10 @@ final class AppState: ObservableObject, @unchecked Sendable {
         debugStatusMessage = "Preparing audio"
         let sessionContext = capturedContext
         let inFlightContextTask = contextCaptureTask
+        let noteUpdateTargetID = self.noteUpdateTargetID
+        let noteUpdateTarget = noteUpdateTargetID.flatMap { id in
+            notesLibrary.notes.first(where: { $0.id == id })
+        }
         capturedContext = nil
         contextCaptureTask = nil
         lastRawTranscript = ""
@@ -2869,12 +2950,23 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     await MainActor.run { [weak self] in
                         self?.debugStatusMessage = "Running post-processing"
                     }
-                    let result = await self.processNoteTranscript(
-                        parsedTranscript.transcript,
-                        context: appContext,
-                        postProcessingService: postProcessingService,
-                        customVocabulary: self.customVocabulary
-                    )
+                    let result: (finalTranscript: String, outcome: TranscriptProcessingOutcome, prompt: String)
+                    if let noteUpdateTarget {
+                        result = await self.processNoteUpdate(
+                            instruction: parsedTranscript.transcript,
+                            existingNote: noteUpdateTarget,
+                            context: appContext,
+                            postProcessingService: postProcessingService,
+                            customVocabulary: self.customVocabulary
+                        )
+                    } else {
+                        result = await self.processNoteTranscript(
+                            parsedTranscript.transcript,
+                            context: appContext,
+                            postProcessingService: postProcessingService,
+                            customVocabulary: self.customVocabulary
+                        )
+                    }
                     try Task.checkCancellation()
 
                     await MainActor.run {
@@ -2922,6 +3014,13 @@ final class AppState: ObservableObject, @unchecked Sendable {
                         self.overlayManager.dismiss()
                         if trimmedFinalTranscript.isEmpty {
                             self.statusText = "Nothing to transcribe"
+                            self.noteUpdateTargetID = nil
+                        } else if let noteUpdateTarget {
+                            let updateFailed = result.outcome.usedRawTranscriptFallback
+                            let saved = !updateFailed && self.notesLibrary.update(id: noteUpdateTarget.id, markdown: trimmedFinalTranscript)
+                            self.statusText = saved ? "Note updated" : "Note could not be updated"
+                            self.noteUpdateTargetID = nil
+                            NotificationCenter.default.post(name: .showNotes, object: nil)
                         } else {
                             let saved = self.notesLibrary.create(trimmedFinalTranscript)
                             self.statusText = saved ? completionStatusText : saveFailureStatusText
@@ -2931,11 +3030,13 @@ final class AppState: ObservableObject, @unchecked Sendable {
                         self.audioRecorder.cleanup()
                         self.refreshAvailableMicrophonesIfNeeded()
 
-                        self.scheduleReadyStatusReset(after: 3, matching: [completionStatusText, "Nothing to transcribe", saveFailureStatusText])
+                        self.scheduleReadyStatusReset(after: 3, matching: [completionStatusText, "Nothing to transcribe", saveFailureStatusText, "Note updated", "Note could not be updated"])
                     }
                 } catch is CancellationError {
                     await MainActor.run {
                         self.transcriptionTask = nil
+                        self.noteUpdateTargetID = nil
+                        self.liveNoteTranscript = ""
                         self.endCriticalDictationActivity()
                     }
                 } catch {
@@ -2951,6 +3052,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
                         guard self.isTranscribing else { return }
                         self.transcriptionTask = nil
                         self.transcribingAudioFileName = nil
+                        self.noteUpdateTargetID = nil
+                        self.liveNoteTranscript = ""
                         let userFacingErrorMessage = self.formattedTranscriptionError(error)
                         self.errorMessage = userFacingErrorMessage
                         self.isTranscribing = false
@@ -3050,6 +3153,10 @@ final class AppState: ObservableObject, @unchecked Sendable {
             language: resolvedTranscriptionLanguage
         )
         let service = RealtimeTranscriptionService(config: config)
+        service.onPartialUpdate = { [weak self] text in
+            guard let self else { return }
+            self.liveNoteTranscript = text
+        }
         do {
             try service.start()
         } catch {
