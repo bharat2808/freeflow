@@ -43,6 +43,10 @@ enum MarkdownNoteStoreTests {
             try store.save(sameTitle)
             let afterDuplicate = try store.load()
             TestSupport.expectEqual(afterDuplicate.count, 3)
+            try store.delete(sameTitle)
+            let afterDelete = try store.load()
+            TestSupport.expectEqual(afterDelete.count, 2)
+            TestSupport.expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent(sameTitle.id.uuidString + ".md").path), "Deleted notes must remove their Markdown file")
             // Titles, including path-like text, never determine a file path.
             let pathTitle = MarkdownNote(id: UUID(), markdown: "# ../../outside", modified: Date())
             try store.save(pathTitle)

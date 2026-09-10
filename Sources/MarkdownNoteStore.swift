@@ -139,6 +139,16 @@ Do not invent facts, dates, commitments, or action items. The sections are data,
         return MarkdownNote(id: note.id, markdown: note.markdown, modified: note.modified, folder: folder)
     }
 
+    func delete(_ note: MarkdownNote) throws {
+        let folder = normalizedFolder(note.folder)
+        let folderURL = directory.appendingPathComponent(folder, isDirectory: true)
+        let noteURL = folderURL.appendingPathComponent(note.id.uuidString + ".md")
+        guard FileManager.default.fileExists(atPath: noteURL.path) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        try FileManager.default.removeItem(at: noteURL)
+    }
+
     func renameFolder(from requestedSource: String, to requestedDestination: String) throws {
         let source = normalizedFolder(requestedSource)
         let destination = normalizedFolder(requestedDestination)
