@@ -10,25 +10,106 @@ enum LocalWhisperModelDownloader {
             .appendingPathComponent(".cache/whisper/ggml-base.en.bin")
     }
 
-    static func downloadBaseEnglishModel() async throws -> URL {
+    static func downloadBaseEnglishModel(
+        progress: @escaping @Sendable (Double) -> Void = { _ in }
+    ) async throws -> URL {
         let destination = baseEnglishModelPath
         if FileManager.default.fileExists(atPath: destination.path) {
+            progress(1)
             return destination
         }
 
         let directory = destination.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let (temporaryURL, response) = try await URLSession.shared.download(from: baseEnglishModelURL)
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200..<300).contains(httpResponse.statusCode) else {
-            throw URLError(.badServerResponse)
+        let temporaryURL = try await downloadToTemporaryFile(progress: progress)
+        try? FileManager.default.removeItem(at: destination)
+        try FileManager.default.moveItem(at: temporaryURL, to: destination)
+        progress(1)
+        return destination
+    }
+
+    private static func downloadToTemporaryFile(
+        progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> URL {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FreeFlowWhisperDownload", isDirectory: true)
+        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        let temporaryURL = temporaryDirectory.appendingPathComponent(UUID().uuidString + ".bin")
+
+        return try await withCheckedThrowingContinuation { continuation in
+            let delegate = ModelDownloadDelegate(
+                destinationURL: temporaryURL,
+                progress: progress,
+                continuation: continuation
+            )
+            let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+            delegate.session = session
+            let task = session.downloadTask(with: baseEnglishModelURL)
+            task.resume()
+        }
+    }
+}
+
+private final class ModelDownloadDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    let destinationURL: URL
+    let progress: @Sendable (Double) -> Void
+    let continuation: CheckedContinuation<URL, Error>
+    var session: URLSession?
+    private var downloadedURL: URL?
+    private var downloadError: Error?
+
+    init(
+        destinationURL: URL,
+        progress: @escaping @Sendable (Double) -> Void,
+        continuation: CheckedContinuation<URL, Error>
+    ) {
+        self.destinationURL = destinationURL
+        self.progress = progress
+        self.continuation = continuation
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        guard totalBytesExpectedToWrite > 0 else { return }
+        progress(min(1, max(0, Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))))
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {
+        do {
+            try FileManager.default.removeItem(at: destinationURL)
+        } catch let error as NSError where error.code == NSFileNoSuchFileError {
+            // Expected for the first download.
+        } catch {
+            downloadError = error
+            return
         }
 
-        if FileManager.default.fileExists(atPath: destination.path) {
-            try FileManager.default.removeItem(at: destination)
+        do {
+            try FileManager.default.copyItem(at: location, to: destinationURL)
+            downloadedURL = destinationURL
+        } catch {
+            downloadError = error
         }
-        try FileManager.default.moveItem(at: temporaryURL, to: destination)
-        return destination
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        defer { session.invalidateAndCancel() }
+        if let error = error ?? downloadError {
+            continuation.resume(throwing: error)
+        } else if let downloadedURL {
+            continuation.resume(returning: downloadedURL)
+        } else {
+            continuation.resume(throwing: URLError(.cannotDecodeContentData))
+        }
     }
 }
 

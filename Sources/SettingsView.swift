@@ -58,6 +58,7 @@ struct ProviderSettingsFields: View {
     @State private var postProcessingFallbackModelDraft: String = ""
     @State private var contextModelDraft: String = ""
     @State private var isDownloadingLocalWhisperModel = false
+    @State private var localWhisperDownloadProgress = 0.0
     @State private var localWhisperDownloadError: String?
     /// Updated by the cooldown timer so warning labels clear at expiry without user interaction.
     @State private var now: Date = Date()
@@ -110,12 +111,18 @@ struct ProviderSettingsFields: View {
     private func downloadBaseLocalWhisperModel() {
         guard !isDownloadingLocalWhisperModel else { return }
         isDownloadingLocalWhisperModel = true
+        localWhisperDownloadProgress = 0
         localWhisperDownloadError = nil
         Task {
             do {
-                let url = try await LocalWhisperModelDownloader.downloadBaseEnglishModel()
+                let url = try await LocalWhisperModelDownloader.downloadBaseEnglishModel { progress in
+                    Task { @MainActor in
+                        localWhisperDownloadProgress = progress
+                    }
+                }
                 await MainActor.run {
                     appState.localWhisperModelPath = url.path
+                    localWhisperDownloadProgress = 1
                     isDownloadingLocalWhisperModel = false
                 }
             } catch {
@@ -350,14 +357,22 @@ struct ProviderSettingsFields: View {
                             downloadBaseLocalWhisperModel()
                         } label: {
                             Label(
-                                isDownloadingLocalWhisperModel ? "Downloading…" : "Download base.en model",
-                                systemImage: "arrow.down.circle"
+                                isDownloadingLocalWhisperModel
+                                    ? "Downloading \(Int(localWhisperDownloadProgress * 100))%"
+                                    : (FileManager.default.fileExists(
+                                        atPath: LocalWhisperModelDownloader.baseEnglishModelPath.path
+                                    ) ? "Downloaded" : "Download base.en model"),
+                                systemImage: isDownloadingLocalWhisperModel
+                                    ? "arrow.down.circle"
+                                    : (FileManager.default.fileExists(
+                                        atPath: LocalWhisperModelDownloader.baseEnglishModelPath.path
+                                    ) ? "checkmark.circle.fill" : "arrow.down.circle")
                             )
                         }
                         .disabled(isDownloadingLocalWhisperModel)
                         if isDownloadingLocalWhisperModel {
-                            ProgressView()
-                                .controlSize(.small)
+                            ProgressView(value: localWhisperDownloadProgress)
+                                .frame(width: 120)
                         }
                     }
                     Text("Downloads the standard English model to ~/.cache/whisper (the download is about 142 MB).")
