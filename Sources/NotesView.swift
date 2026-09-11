@@ -264,6 +264,25 @@ struct NotesView: View {
                 }
             }
             .searchable(text: $search, prompt: "Search notes")
+            .contextMenu {
+                Button {
+                    library.create("# Untitled note\n\n")
+                } label: {
+                    Label("New note", systemImage: "square.and.pencil")
+                }
+                Button {
+                    newFolderName = ""
+                    showCreateFolderSheet = true
+                } label: {
+                    Label("New folder", systemImage: "folder.badge.plus")
+                }
+                Divider()
+                Button {
+                    library.reload()
+                } label: {
+                    Label("Refresh notes", systemImage: "arrow.clockwise")
+                }
+            }
             .navigationTitle("Notes")
             .navigationSplitViewColumnWidth(min: 220, ideal: 260)
         } detail: {
