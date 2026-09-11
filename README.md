@@ -95,7 +95,7 @@ For fully local speech-to-text, install `whisper-cpp` with `brew install whisper
 <details>
   <summary>Configure longer timeouts for local models</summary>
 
-  FreeFlow keeps normal requests at 20 seconds and note-processing requests at up to 120 seconds by default. You can override the post-processing limit with macOS defaults:
+  FreeFlow keeps normal requests at 20 seconds. Individual note-processing requests can run for up to 120 seconds, while a long note has a 90-second overall formatting deadline. You can override these limits with macOS defaults:
 
 ```bash
 defaults write com.zachlatta.freeflow transcription_timeout_seconds -float 120
@@ -108,6 +108,7 @@ The timeout keys are:
 - `transcription_timeout_seconds`: audio transcription requests
 - `post_processing_timeout_seconds`: transcript cleanup and edit mode requests
 - `context_request_timeout_seconds`: nearby app context requests
+- `note_processing_total_timeout_seconds`: overall deadline for a long note's formatting and synthesis pipeline
 
 Only positive values are used. Remove a custom timeout to return to the 20-second default:
 
@@ -115,6 +116,7 @@ Only positive values are used. Remove a custom timeout to return to the 20-secon
 defaults delete com.zachlatta.freeflow transcription_timeout_seconds
 defaults delete com.zachlatta.freeflow post_processing_timeout_seconds
 defaults delete com.zachlatta.freeflow context_request_timeout_seconds
+defaults delete com.zachlatta.freeflow note_processing_total_timeout_seconds
 ```
 
 </details>

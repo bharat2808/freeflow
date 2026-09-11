@@ -138,6 +138,11 @@ fileprivate struct NoteFormattingResult: Sendable {
     let prompt: String
 }
 
+private enum NoteProcessingRaceResult: Sendable {
+    case completed(finalTranscript: String, outcome: AppState.TranscriptProcessingOutcome, prompt: String)
+    case timedOut
+}
+
 enum NoteVoiceAction: Sendable, Equatable {
     case update
     case append
@@ -300,6 +305,10 @@ final class AppState: ObservableObject, @unchecked Sendable {
     static let defaultPostProcessingFallbackModel = "qwen/qwen3.6-27b"
     static let defaultContextModel = "qwen/qwen3.6-27b"
     static let noteProcessingTimeoutSeconds: TimeInterval = 120
+    static var noteProcessingOverallTimeoutSeconds: TimeInterval {
+        let override = UserDefaults.standard.double(forKey: "note_processing_total_timeout_seconds")
+        return override > 0 ? override : 90
+    }
     private static let deprecatedDefaultPostProcessingFallbackModel = "meta-llama/llama-4-scout-17b-16e-instruct"
     private static let deprecatedDefaultContextModel = "meta-llama/llama-4-scout-17b-16e-instruct"
     private static let trailingPressEnterCommandPattern = try! NSRegularExpression(
@@ -2846,6 +2855,55 @@ final class AppState: ObservableObject, @unchecked Sendable {
         )
     }
 
+    private func processNoteTranscriptWithDeadline(
+        _ rawTranscript: String,
+        context: AppContext,
+        postProcessingService: PostProcessingService,
+        customVocabulary: String
+    ) async -> (finalTranscript: String, outcome: TranscriptProcessingOutcome, prompt: String) {
+        let timeoutSeconds = Self.noteProcessingOverallTimeoutSeconds
+        let winner = await withTaskGroup(of: NoteProcessingRaceResult.self) { group in
+            group.addTask { [self] in
+                let result = await self.processNoteTranscript(
+                    rawTranscript,
+                    context: context,
+                    postProcessingService: postProcessingService,
+                    customVocabulary: customVocabulary
+                )
+                return .completed(
+                    finalTranscript: result.finalTranscript,
+                    outcome: result.outcome,
+                    prompt: result.prompt
+                )
+            }
+            group.addTask {
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                } catch {
+                    return .timedOut
+                }
+                return .timedOut
+            }
+
+            let result = await group.next() ?? .timedOut
+            group.cancelAll()
+            return result
+        }
+
+        switch winner {
+        case .completed(let finalTranscript, let outcome, let prompt):
+            return (finalTranscript, outcome, prompt)
+        case .timedOut:
+            os_log(
+                .error,
+                log: recordingLog,
+                "note processing exceeded overall deadline of %.0fs; using raw transcript",
+                timeoutSeconds
+            )
+            return (rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines), .postProcessingFailedFallback, "")
+        }
+    }
+
     private func processNoteUpdate(
         instruction: String,
         existingNote: MarkdownNote,
@@ -3077,7 +3135,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                             customVocabulary: self.customVocabulary
                         )
                     } else {
-                        result = await self.processNoteTranscript(
+                        result = await self.processNoteTranscriptWithDeadline(
                             parsedTranscript.transcript,
                             context: appContext,
                             postProcessingService: postProcessingService,
