@@ -2677,8 +2677,18 @@ final class AppState: ObservableObject, @unchecked Sendable {
         fileService: AudioTranscriber,
         fileURL: URL
     ) async throws -> String {
+        let startedAt = CFAbsoluteTimeGetCurrent()
         let chunkSet = try AudioChunker.split(fileURL: fileURL)
         defer { chunkSet.cleanup() }
+        defer {
+            os_log(
+                .info,
+                log: recordingLog,
+                "file transcription finished chunks=%d elapsed=%.0fms",
+                chunkSet.urls.count,
+                (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+            )
+        }
 
         if chunkSet.urls.count == 1 {
             await MainActor.run {
@@ -2903,6 +2913,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     }
 
     private func stopAndTranscribe() {
+        let stopStartedAt = CFAbsoluteTimeGetCurrent()
         cancelPendingShortcutStart()
         cancelRecordingInitializationTimer()
         shortcutSessionController.reset()
@@ -2996,6 +3007,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     activeLocalPreview?.stop()
                 }
                 do {
+                    let transcriptionStartedAt = CFAbsoluteTimeGetCurrent()
                     let transcriptionService = try self.makeTranscriptionService(noteProcessing: true)
                     let rawTranscript: String
                     if let activeRealtime {
@@ -3020,6 +3032,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                             fileURL: transcriptionFileURL
                         )
                     }
+                    let transcriptionElapsed = CFAbsoluteTimeGetCurrent() - transcriptionStartedAt
                     let parsedTranscript = Self.parseTranscriptCommands(
                         from: rawTranscript,
                         pressEnterCommandEnabled: false
@@ -3035,14 +3048,17 @@ final class AppState: ObservableObject, @unchecked Sendable {
                             self?.lastTranscript = bootstrapTranscript
                         }
                     }
+                    let contextWaitStartedAt = CFAbsoluteTimeGetCurrent()
                     let appContext: AppContext
                     if let sessionContext {
                         appContext = sessionContext
                     } else if let inFlightContext = await inFlightContextTask?.value {
+                        os_log(.info, log: recordingLog, "awaited in-flight context capture")
                         appContext = inFlightContext
                     } else {
                         appContext = self.fallbackContextAtStop()
                     }
+                    let contextWaitElapsed = CFAbsoluteTimeGetCurrent() - contextWaitStartedAt
                     try Task.checkCancellation()
                     let postProcessingStartedAt = CFAbsoluteTimeGetCurrent()
                     await MainActor.run { [weak self] in
@@ -3068,6 +3084,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                             customVocabulary: self.customVocabulary
                         )
                     }
+                    let postProcessingElapsed = CFAbsoluteTimeGetCurrent() - postProcessingStartedAt
                     os_log(
                         .info,
                         log: recordingLog,
@@ -3089,6 +3106,13 @@ final class AppState: ObservableObject, @unchecked Sendable {
                         self.lastContextLLMPrompt = appContext.contextPrompt ?? ""
                         let trimmedRawTranscript = parsedTranscript.transcript
                         let trimmedFinalTranscript = result.finalTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+                        self.debugStatusMessage = String(
+                            format: "Done (Whisper %.1fs, context %.1fs, post-processing %.1fs, total %.1fs)",
+                            transcriptionElapsed,
+                            contextWaitElapsed,
+                            postProcessingElapsed,
+                            CFAbsoluteTimeGetCurrent() - stopStartedAt
+                        )
                         let processingStatus = Self.statusMessage(
                             for: result.outcome,
                             parsedTranscript: parsedTranscript
@@ -3114,7 +3138,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
                         self.lastTranscript = trimmedFinalTranscript
                         self.isTranscribing = false
                         self.endCriticalDictationActivity()
-                        self.debugStatusMessage = "Done"
                         let completionStatusText = "Note saved"
                         let saveFailureStatusText = "Note could not be saved"
                         self.clearPendingOverlayDismissToken()

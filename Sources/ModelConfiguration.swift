@@ -81,10 +81,10 @@ public struct ModelConfiguration {
         } else if cleanModel.hasPrefix("deepseek/") {
             // DeepSeek reasoning models otherwise spend their completion budget
             // on hidden reasoning before returning note content. Post-processing
-            // needs a concise deterministic rewrite, so disable reasoning and
-            // cap the response to keep latency bounded.
+            // needs a deterministic rewrite, so disable reasoning while leaving
+            // the provider free to choose the completion length.
             return ModelConfig(
-                maxCompletionTokens: 2048,
+                maxCompletionTokens: nil,
                 reasoningEffort: "none",
                 includeReasoning: false,
                 shouldStripThinkTags: true
