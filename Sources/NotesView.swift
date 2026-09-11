@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 final class NotesLibrary: ObservableObject {
     @Published var notes: [MarkdownNote] = []
@@ -192,6 +193,20 @@ struct NotesView: View {
         }.count
     }
 
+    private func moveDroppedNote(from providers: [NSItemProvider], to folder: String) -> Bool {
+        guard let provider = providers.first else { return false }
+        provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let value = object as? NSString,
+                  let noteID = UUID(uuidString: value as String) else { return }
+            DispatchQueue.main.async {
+                library.selectedID = noteID
+                library.moveSelected(to: folder)
+                folderFilter = folder.isEmpty ? "__inbox__" : folder
+            }
+        }
+        return true
+    }
+
     private var liveTranscript: String {
         let live = appState.liveNoteTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         if !live.isEmpty { return live }
@@ -209,6 +224,9 @@ struct NotesView: View {
                         id: "__inbox__",
                         count: library.notes.filter { $0.folder.isEmpty }.count
                     )
+                    .onDrop(of: [UTType.text.identifier], isTargeted: nil) { providers in
+                        moveDroppedNote(from: providers, to: "")
+                    }
                     ForEach(visibleFolders, id: \.self) { folder in
                         HStack(spacing: 8) {
                             folderRow(
@@ -228,6 +246,9 @@ struct NotesView: View {
                             .buttonStyle(.borderless)
                             .help("Rename folder")
                         }
+                        .onDrop(of: [UTType.text.identifier], isTargeted: nil) { providers in
+                            moveDroppedNote(from: providers, to: folder)
+                        }
                     }
                 }
                 Section("Notes") {
@@ -245,6 +266,9 @@ struct NotesView: View {
                         }
                         .padding(.vertical, 5)
                         .tag(note.id)
+                        .onDrag {
+                            NSItemProvider(object: note.id.uuidString as NSString)
+                        }
                         .contextMenu {
                             Button {
                                 library.selectedID = note.id
