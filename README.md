@@ -29,7 +29,7 @@ FreeFlow Notes is a free Mac dictation and Markdown notes app. It gives you fast
 
 ## Quick Start
 
-1. Clone this fork, then run `make run` to build and launch FreeFlow Notes
+1. Clone this fork, then run `make run` to build and launch the regular FreeFlow Notes app. Use `make dev` only when you explicitly need the separate developer bundle.
 2. Get a free Groq API key from [groq.com](https://groq.com/)
 3. Hold `Fn` to talk, or tap `Command-Fn` to start and stop dictation. FreeFlow Notes post-processes the transcript into Markdown and opens it in the notes window.
 

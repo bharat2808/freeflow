@@ -1,5 +1,5 @@
-APP_NAME ?= FreeFlow Dev
-BUNDLE_ID ?= com.zachlatta.freeflow.dev
+APP_NAME ?= FreeFlow
+BUNDLE_ID ?= com.zachlatta.freeflow
 BUILD_DIR = build
 APP_BUNDLE = $(BUILD_DIR)/$(APP_NAME).app
 CONTENTS = $(APP_BUNDLE)/Contents
@@ -49,7 +49,7 @@ ICON_SOURCE = Resources/AppIcon-Source.png
 ICON_ICNS = Resources/AppIcon.icns
 endif
 
-.PHONY: all check clean run icon dmg codesign-dmg notarize test typecheck validate
+.PHONY: all check clean run dev icon dmg codesign-dmg notarize test typecheck validate
 
 all: $(APP_EXECUTABLE_TARGET)
 
@@ -176,3 +176,8 @@ clean:
 
 run: all
 	open "$(APP_BUNDLE)"
+
+# The developer bundle is opt-in. Keeping it explicit prevents macOS
+# permissions and settings from silently switching between app identities.
+dev:
+	$(MAKE) APP_NAME="FreeFlow Dev" BUNDLE_ID=com.zachlatta.freeflow.dev all
