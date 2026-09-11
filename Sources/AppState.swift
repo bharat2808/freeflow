@@ -661,6 +661,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private var contextCaptureTask: Task<AppContext?, Never>?
     private var capturedContext: AppContext?
     private var hasShownScreenshotPermissionAlert = false
+    private var hasPresentedAutomaticAccessibilityAlert = false
     private var audioDeviceObservers: [NSObjectProtocol] = []
     private var needsMicrophoneRefreshAfterRecording = false
     private let pipelineHistoryStore = PipelineHistoryStore()
@@ -2111,6 +2112,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
             activeRecordingTriggerMode = nil
             currentSessionIntent = .dictation
             shortcutSessionController.reset()
+            DispatchQueue.main.async { [weak self] in
+                self?.showAccessibilityAlertIfNeeded()
+            }
             return false
         }
         if let startedAt {
@@ -2455,6 +2459,15 @@ final class AppState: ObservableObject, @unchecked Sendable {
         if response == .alertFirstButtonReturn {
             openAccessibilitySettings()
         }
+    }
+
+    /// Presents the permission alert at most once per app launch. Manual menu
+    /// actions still call `showAccessibilityAlert()` directly so the user can
+    /// reopen the guidance after dismissing the automatic alert.
+    func showAccessibilityAlertIfNeeded() {
+        guard !hasPresentedAutomaticAccessibilityAlert, !AXIsProcessTrusted() else { return }
+        hasPresentedAutomaticAccessibilityAlert = true
+        showAccessibilityAlert()
     }
 
     private func precomputeMacros() {
