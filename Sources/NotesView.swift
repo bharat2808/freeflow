@@ -186,6 +186,12 @@ struct NotesView: View {
         }
     }
 
+    private func noteCount(in folder: String) -> Int {
+        library.notes.filter { note in
+            note.folder == folder || note.folder.hasPrefix(folder + "/")
+        }.count
+    }
+
     private var liveTranscript: String {
         let live = appState.liveNoteTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         if !live.isEmpty { return live }
@@ -209,7 +215,7 @@ struct NotesView: View {
                                 title: folder,
                                 icon: "folder",
                                 id: folder,
-                                count: library.notes.filter { $0.folder == folder }.count
+                                count: noteCount(in: folder)
                             )
                             Button {
                                 selectedFolderForRename = folder
@@ -430,7 +436,11 @@ struct NotesView: View {
                     Button("Cancel") { showRenameSheet = false }
                     Button("Rename") {
                         if let folder = selectedFolderForRename ?? selectedNoteFolder {
+                            let replacement = renameFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
                             library.renameFolder(from: folder, to: renameFolderName)
+                            if folderFilter == folder, !replacement.isEmpty {
+                                folderFilter = replacement
+                            }
                         }
                         selectedFolderForRename = nil
                         showRenameSheet = false
