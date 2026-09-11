@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let postProcessingLog = OSLog(subsystem: "com.zachlatta.freeflow", category: "PostProcessing")
 
 enum PostProcessingError: LocalizedError {
     case requestFailed(Int, String)
@@ -480,6 +483,17 @@ Behavior:
         customSystemPrompt: String = "",
         outputLanguage: String = ""
     ) async throws -> PostProcessingResult {
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        defer {
+            os_log(
+                .info,
+                log: postProcessingLog,
+                "LLM request finished model=%{public}@ transcriptChars=%d elapsed=%.0fms",
+                model,
+                transcript.count,
+                (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+            )
+        }
         var request = URLRequest(url: URL(string: "\(baseURL)/chat/completions")!)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
