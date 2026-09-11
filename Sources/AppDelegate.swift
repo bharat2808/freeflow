@@ -33,9 +33,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 UpdateManager.shared.startPeriodicChecks()
             }
 
-            if !AXIsProcessTrusted() {
-                appState.showAccessibilityAlert()
-            }
         }
 
     }
@@ -192,8 +189,5 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             UpdateManager.shared.startPeriodicChecks()
         }
 
-        if !AXIsProcessTrusted() {
-            appState.showAccessibilityAlert()
-        }
     }
 }
