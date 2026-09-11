@@ -2588,6 +2588,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
         guard !trimmedRawTranscript.isEmpty else {
             return ("", .skippedEmptyRawTranscript, "")
         }
+        if Task.isCancelled {
+            return (trimmedRawTranscript, .postProcessingFailedFallback, "")
+        }
 
         if case .command(let invocation, let selectedText) = intent {
             do {
@@ -2760,6 +2763,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
         let formattedChunks = await withTaskGroup(of: (Int, NoteFormattingResult).self) { group in
             for (index, chunk) in rawChunks.enumerated() {
+                guard !Task.isCancelled else { break }
                 group.addTask { [self] in
                     let result = await self.processTranscript(
                         chunk,
@@ -2800,6 +2804,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
 
         while sections.count > 1 {
+            if Task.isCancelled {
+                return (rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines), .postProcessingFailedFallback, "")
+            }
             await MainActor.run {
                 self.statusText = "Combining Markdown sections in parallel..."
                 self.debugStatusMessage = "Combining Markdown sections"
