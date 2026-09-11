@@ -367,7 +367,7 @@ struct NotesView: View {
         }
         .toolbar {
             Button { library.create("# Untitled note\n\n") } label: { Label("New note", systemImage: "square.and.pencil") }
-            Button { appState.toggleRecording() } label: {
+            Button { appState.startNoteRecording() } label: {
                 Label(appState.isRecording ? "Stop & save" : "Record note", systemImage: appState.isRecording ? "stop.circle.fill" : "mic.fill")
             }.disabled(appState.isTranscribing)
             Toggle(isOn: $preview) { Label("Preview", systemImage: "eye") }
