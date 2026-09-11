@@ -101,6 +101,7 @@ For fully local speech-to-text, install `whisper-cpp` with `brew install whisper
 defaults write com.zachlatta.freeflow transcription_timeout_seconds -float 120
 defaults write com.zachlatta.freeflow post_processing_timeout_seconds -float 120
 defaults write com.zachlatta.freeflow context_request_timeout_seconds -float 120
+defaults write com.zachlatta.freeflow note_processing_total_timeout_seconds -float 90
 ```
 
 The timeout keys are:
@@ -110,7 +111,7 @@ The timeout keys are:
 - `context_request_timeout_seconds`: nearby app context requests
 - `note_processing_total_timeout_seconds`: overall deadline for a long note's formatting and synthesis pipeline
 
-Only positive values are used. Remove a custom timeout to return to the 20-second default:
+Only positive values are used. Removing a custom key restores that setting's built-in default:
 
 ```bash
 defaults delete com.zachlatta.freeflow transcription_timeout_seconds
