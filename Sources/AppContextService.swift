@@ -293,11 +293,13 @@ Selected text: \(selectedText ?? "None")
             // models can spend the entire request thinking before returning the
             // two-sentence summary, which makes stopping a recording appear hung.
             let config = ModelConfiguration.config(for: model)
-            if let effort = config.reasoningEffort {
-                payload["reasoning_effort"] = effort
-            }
-            if let include = config.includeReasoning {
-                payload["include_reasoning"] = include
+            if Self.supportsReasoningControls(baseURL: baseURL) {
+                if let effort = config.reasoningEffort {
+                    payload["reasoning_effort"] = effort
+                }
+                if let include = config.includeReasoning {
+                    payload["include_reasoning"] = include
+                }
             }
 
             request.httpBody = try JSONSerialization.data(withJSONObject: payload, options: [])
@@ -333,6 +335,13 @@ Selected text: \(selectedText ?? "None")
         let cleaned = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return nil }
         return normalizedActivitySummary(cleaned)
+    }
+
+    private static func supportsReasoningControls(baseURL: String) -> Bool {
+        guard let host = URL(string: baseURL)?.host?.lowercased() else { return false }
+        return host == "api.groq.com"
+            || host == "openrouter.ai"
+            || host.hasSuffix(".openrouter.ai")
     }
 
     private static func normalizedActivitySummary(_ value: String) -> String {
