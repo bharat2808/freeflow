@@ -1106,11 +1106,15 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
     func makeTranscriptionService(noteProcessing: Bool = false) throws -> AudioTranscriber {
         if transcriptionEngine == .localWhisper {
+            let configuredTimeout = UserDefaults.standard.double(forKey: "transcription_timeout_seconds")
+            let timeout = configuredTimeout > 0
+                ? configuredTimeout
+                : (noteProcessing ? Self.noteProcessingTimeoutSeconds : 20)
             return try LocalWhisperTranscriptionService(
                 executablePath: localWhisperExecutablePath,
                 modelPath: localWhisperModelPath,
                 language: resolvedTranscriptionLanguage,
-                timeoutSeconds: Self.noteProcessingTimeoutSeconds
+                timeoutSeconds: timeout
             )
         }
         return try TranscriptionService(
@@ -1877,6 +1881,17 @@ final class AppState: ObservableObject, @unchecked Sendable {
         toggleRecording()
     }
 
+    func toggleNoteRecording() {
+        if isRecording {
+            // Do not let the Notes toolbar stop a normal dictation session
+            // that happens to be visible while the Notes window is open.
+            guard activeNoteRecording else { return }
+            toggleRecording()
+        } else {
+            startNoteRecording()
+        }
+    }
+
     func startNoteUpdate(noteID: UUID) {
         guard !isRecording, !isTranscribing,
               notesLibrary.notes.contains(where: { $0.id == noteID }) else { return }
@@ -2099,6 +2114,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
             startedAt: t0
         ) else {
             activeNoteRecording = false
+            noteUpdateTargetID = nil
+            noteVoiceAction = nil
             return
         }
         guard ensureMicrophoneAccess() else {
@@ -2122,31 +2139,46 @@ final class AppState: ObservableObject, @unchecked Sendable {
         startedAt: CFAbsoluteTime? = nil
     ) -> Bool {
         activeRecordingTriggerMode = triggerMode
-        let isAccessibilityTrusted = AXIsProcessTrusted()
-        hasAccessibility = isAccessibilityTrusted
-        guard isAccessibilityTrusted else {
-            errorMessage = "Accessibility permission required. Grant access in System Settings > Privacy & Security > Accessibility."
-            statusText = "No Accessibility"
-            activeRecordingTriggerMode = nil
-            currentSessionIntent = .dictation
-            shortcutSessionController.reset()
-            DispatchQueue.main.async { [weak self] in
-                self?.showAccessibilityAlertIfNeeded()
+        if !activeNoteRecording {
+            let isAccessibilityTrusted = AXIsProcessTrusted()
+            hasAccessibility = isAccessibilityTrusted
+            guard isAccessibilityTrusted else {
+                errorMessage = "Accessibility permission required. Grant access in System Settings > Privacy & Security > Accessibility."
+                statusText = "No Accessibility"
+                activeRecordingTriggerMode = nil
+                currentSessionIntent = .dictation
+                shortcutSessionController.reset()
+                DispatchQueue.main.async { [weak self] in
+                    self?.showAccessibilityAlertIfNeeded()
+                }
+                return false
             }
-            return false
-        }
-        if let startedAt {
-            os_log(.info, log: recordingLog, "accessibility check passed: %.3fms", (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
+            if let startedAt {
+                os_log(.info, log: recordingLog, "accessibility check passed: %.3fms", (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
+            }
         }
 
-        let selectionSnapshot = selectionSnapshot ?? contextService.collectSelectionSnapshot()
-        let manualCommandRequested = manualCommandRequested
-            ?? hotkeyManager.currentPressedModifiers.contains(commandModeManualModifier.shortcutModifier)
-        guard let resolvedIntent = resolveSessionIntent(
-            triggerMode: triggerMode,
-            selectionSnapshot: selectionSnapshot,
-            manualCommandRequested: manualCommandRequested
-        ) else { return false }
+        let resolvedIntent: SessionIntent
+        if activeNoteRecording {
+            // Note recordings never transform selected text or paste into the
+            // frontmost app, so they do not need Accessibility or selection
+            // capture at all.
+            resolvedIntent = .dictation
+        } else {
+            let selectionSnapshot = selectionSnapshot ?? contextService.collectSelectionSnapshot()
+            let manualCommandRequested = manualCommandRequested
+                ?? hotkeyManager.currentPressedModifiers.contains(commandModeManualModifier.shortcutModifier)
+            guard let intent = resolveSessionIntent(
+                triggerMode: triggerMode,
+                selectionSnapshot: selectionSnapshot,
+                manualCommandRequested: manualCommandRequested
+            ) else {
+                noteUpdateTargetID = nil
+                noteVoiceAction = nil
+                return false
+            }
+            resolvedIntent = intent
+        }
 
         if resolvedIntent.isCommandMode {
             guard ensureScreenCaptureAccess() else { return false }
@@ -2377,7 +2409,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 os_log(.info, log: recordingLog, "audioRecorder.startRecording() done: %.3fms", (CFAbsoluteTimeGetCurrent() - t0) * 1000)
                 DispatchQueue.main.async {
                     guard self.isRecording, self.activeRecordingTriggerMode != nil else { return }
-                    self.startContextCapture()
+                    if !self.activeNoteRecording {
+                        self.startContextCapture()
+                    }
                     self.audioLevelCancellable = self.audioRecorder.$audioLevel
                         .receive(on: DispatchQueue.main)
                         .sink { [weak self] level in
@@ -2416,6 +2450,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
         activeRecordingTriggerMode = nil
         currentSessionIntent = .dictation
+        noteUpdateTargetID = nil
+        noteVoiceAction = nil
+        liveNoteTranscript = ""
         shortcutSessionController.reset()
         endCriticalDictationActivity()
         errorMessage = formattedRecordingStartError(error)
@@ -2953,7 +2990,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     ) async -> (finalTranscript: String, outcome: TranscriptProcessingOutcome, prompt: String) {
         let trimmedInstruction = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedInstruction.isEmpty else {
-            return (existingNote.markdown, .skippedEmptyRawTranscript, "")
+            return ("", .skippedEmptyRawTranscript, "")
         }
 
         let trimmedCustomPrompt = noteSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3024,7 +3061,25 @@ final class AppState: ObservableObject, @unchecked Sendable {
         audioLevelCancellable?.cancel()
         audioLevelCancellable = nil
         debugStatusMessage = "Preparing audio"
-        let sessionContext = capturedContext
+        let sessionContext: AppContext?
+        if shouldSaveAsNote || noteUpdateTargetID != nil {
+            // Notes are self-contained and do not need frontmost-window
+            // metadata or screenshots sent to the context provider.
+            sessionContext = AppContext(
+                appName: nil,
+                bundleIdentifier: nil,
+                windowTitle: nil,
+                selectedText: nil,
+                currentActivity: "Recording a Markdown note.",
+                contextSystemPrompt: nil,
+                contextPrompt: nil,
+                screenshotDataURL: nil,
+                screenshotMimeType: nil,
+                screenshotError: nil
+            )
+        } else {
+            sessionContext = capturedContext
+        }
         let inFlightContextTask = contextCaptureTask
         let noteUpdateTargetID = self.noteUpdateTargetID
         let noteVoiceAction = self.noteVoiceAction ?? .update
@@ -3054,6 +3109,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 self.tearDownRealtimeService()
                 self.audioRecorder.cleanup()
                 self.endCriticalDictationActivity()
+                self.noteUpdateTargetID = nil
+                self.noteVoiceAction = nil
+                self.liveNoteTranscript = ""
                 self.errorMessage = "No audio recorded"
                 self.statusText = "Error"
                 self.overlayManager.dismiss()
@@ -3110,7 +3168,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 }
                 do {
                     let transcriptionStartedAt = CFAbsoluteTimeGetCurrent()
-                    let transcriptionService = try self.makeTranscriptionService(noteProcessing: true)
+                    let transcriptionService = try self.makeTranscriptionService(
+                        noteProcessing: shouldSaveAsNote || noteUpdateTarget != nil
+                    )
                     let rawTranscript: String
                     if let activeRealtime {
                         do {
@@ -3264,11 +3324,17 @@ final class AppState: ObservableObject, @unchecked Sendable {
                             : (self.preserveClipboard ? "Pasted at cursor!" : "Copied to clipboard!")
                         let saveFailureStatusText = "Note could not be saved"
                         self.clearPendingOverlayDismissToken()
-                        self.overlayManager.dismiss()
+                        if shouldSaveAsNote || noteUpdateTarget != nil {
+                            self.overlayManager.dismiss()
+                        }
                         if trimmedFinalTranscript.isEmpty {
                             self.statusText = "Nothing to transcribe"
                             self.noteUpdateTargetID = nil
                             self.noteVoiceAction = nil
+                            if !shouldSaveAsNote && noteUpdateTarget == nil,
+                               !self.showPostTranscriptionUpdateReminderIfNeeded() {
+                                self.overlayManager.dismiss()
+                            }
                         } else if let noteUpdateTarget {
                             let updateFailed = result.outcome.usedRawTranscriptFallback
                             let saved = !updateFailed && self.notesLibrary.update(id: noteUpdateTarget.id, markdown: trimmedFinalTranscript)
@@ -3282,6 +3348,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
                             NotificationCenter.default.post(name: .showNotes, object: nil)
                         } else {
                             self.statusText = completionStatusText
+                            if !self.showPostTranscriptionUpdateReminderIfNeeded() {
+                                self.overlayManager.dismiss()
+                            }
                             let pendingClipboardRestore = self.writeTranscriptToPasteboard(trimmedFinalTranscript)
                             self.pasteAtCursorWhenShortcutReleased {
                                 if parsedTranscript.shouldPressEnterAfterPaste {
