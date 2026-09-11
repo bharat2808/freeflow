@@ -26,10 +26,7 @@ public struct ModelConfiguration {
 
     public static let transcriptionModels = [
         "whisper-large-v3",
-        "whisper-large-v3-turbo",
-        "openai/whisper-1",
-        "openai/whisper-large-v3",
-        "openai/whisper-large-v3-turbo"
+        "whisper-large-v3-turbo"
     ]
 
     public static func config(for model: String) -> ModelConfig {
