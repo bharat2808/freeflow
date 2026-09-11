@@ -29,6 +29,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             showNotesWindow()
             appState.startHotkeyMonitoring()
             appState.startAccessibilityPolling()
+            scheduleAccessibilityPrompt()
             Task { @MainActor in
                 UpdateManager.shared.startPeriodicChecks()
             }
@@ -185,9 +186,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         showNotesWindow()
         appState.startHotkeyMonitoring()
         appState.startAccessibilityPolling()
+        scheduleAccessibilityPrompt()
         Task { @MainActor in
             UpdateManager.shared.startPeriodicChecks()
         }
 
+    }
+
+    private func scheduleAccessibilityPrompt() {
+        // Let the notes window finish presenting before opening a modal alert.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+            self?.appState.showAccessibilityAlertIfNeeded()
+        }
     }
 }
