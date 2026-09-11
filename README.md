@@ -95,7 +95,7 @@ For fully local speech-to-text, install `whisper-cpp` with `brew install whisper
 <details>
   <summary>Configure longer timeouts for local models</summary>
 
-  FreeFlow keeps the default network timeout at 20 seconds, but you can extend it with macOS defaults:
+  FreeFlow keeps normal requests at 20 seconds and note-processing requests at up to 120 seconds by default. You can override the post-processing limit with macOS defaults:
 
 ```bash
 defaults write com.zachlatta.freeflow transcription_timeout_seconds -float 120

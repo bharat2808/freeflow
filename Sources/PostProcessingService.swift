@@ -144,7 +144,10 @@ Behavior:
     private let postProcessingMaxCompletionTokens = 4096
     private var postProcessingTimeoutSeconds: TimeInterval {
         let override = UserDefaults.standard.double(forKey: "post_processing_timeout_seconds")
-        return timeoutSecondsOverride ?? (override > 0 ? override : 20)
+        // A user-configured timeout must take precedence over the caller's
+        // default. This lets note processing keep its longer 120s fallback
+        // while still allowing users to cap a slow provider explicitly.
+        return override > 0 ? override : (timeoutSecondsOverride ?? 20)
     }
 
     init(
