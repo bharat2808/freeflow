@@ -312,11 +312,16 @@ final class LocalWhisperTranscriptionService: AudioTranscriber {
             return URL(fileURLWithPath: expanded).standardizedFileURL
         }
 
-        let path = ProcessInfo.processInfo.environment["PATH"] ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+        // Finder-launched apps often receive a reduced PATH that omits
+        // Homebrew. Keep PATH support for custom installs, then search the
+        // standard macOS/Homebrew locations explicitly.
+        let environmentPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        let searchDirectories = environmentPath.split(separator: ":").map(String.init)
+            + ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
         let names = expanded.isEmpty ? ["whisper-cli", "whisper-cpp"] : [expanded]
         for name in names {
-            for directory in path.split(separator: ":") {
-                let candidate = URL(fileURLWithPath: String(directory)).appendingPathComponent(name)
+            for directory in Set(searchDirectories) {
+                let candidate = URL(fileURLWithPath: directory).appendingPathComponent(name)
                 if FileManager.default.isExecutableFile(atPath: candidate.path) {
                     return candidate.standardizedFileURL
                 }

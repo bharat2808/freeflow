@@ -111,8 +111,13 @@ final class NotesLibrary: ObservableObject {
     func moveSelected(to folder: String) {
         guard let selectedID,
               let index = notes.firstIndex(where: { $0.id == selectedID }) else { return }
+        let note = notes[index]
         do {
-            notes[index] = try store.move(notes[index], toFolder: folder)
+            // Flush a debounced editor save before changing the note's path.
+            // Otherwise the delayed write can recreate the old file after the
+            // move has completed.
+            try flushPendingSave(for: note)
+            notes[index] = try store.move(note, toFolder: folder)
             notes.sort { $0.modified > $1.modified }
             error = nil
         } catch {
@@ -141,13 +146,28 @@ final class NotesLibrary: ObservableObject {
         let newValue = newFolder.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !oldValue.isEmpty, !newValue.isEmpty, oldValue != newValue else { return }
         do {
+            let affectedNotes = notes.filter {
+                $0.folder == oldValue || $0.folder.hasPrefix(oldValue + "/")
+            }
+            // Folder moves are path changes too. Persist the latest editor
+            // contents before the atomic directory rename.
+            for note in affectedNotes {
+                try flushPendingSave(for: note)
+            }
             try store.renameFolder(from: oldValue, to: newValue)
-            let affected = notes.filter { $0.folder == oldValue || $0.folder.hasPrefix(oldValue + "/") }
             reload()
-            selectedID = affected.first?.id
+            selectedID = affectedNotes.first?.id
         } catch {
             self.error = "Could not rename folder: \(error.localizedDescription)"
             reload()
+        }
+    }
+
+    private func flushPendingSave(for note: MarkdownNote) throws {
+        pendingSaveWorkItems[note.id]?.cancel()
+        pendingSaveWorkItems[note.id] = nil
+        try saveQueue.sync {
+            try store.save(note)
         }
     }
 
@@ -367,7 +387,7 @@ struct NotesView: View {
         }
         .toolbar {
             Button { library.create("# Untitled note\n\n") } label: { Label("New note", systemImage: "square.and.pencil") }
-            Button { appState.startNoteRecording() } label: {
+            Button { appState.toggleNoteRecording() } label: {
                 Label(appState.isRecording ? "Stop & save" : "Record note", systemImage: appState.isRecording ? "stop.circle.fill" : "mic.fill")
             }.disabled(appState.isTranscribing)
             Toggle(isOn: $preview) { Label("Preview", systemImage: "eye") }
