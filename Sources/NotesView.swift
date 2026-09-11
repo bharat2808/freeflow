@@ -166,11 +166,24 @@ struct NotesView: View {
     @State private var renameFolderName = ""
     @State private var selectedFolderForRename: String?
     @State private var showDeleteConfirmation = false
+    @State private var folderFilter = "__all__"
 
-    private var selectedFolder: String? {
+    private var selectedNoteFolder: String? {
         guard let selectedID = library.selectedID else { return nil }
         let folder = library.notes.first(where: { $0.id == selectedID })?.folder ?? ""
         return folder.isEmpty ? nil : folder
+    }
+
+    private var visibleFolders: [String] {
+        library.folders.filter { !$0.isEmpty }
+    }
+
+    private var visibleNotes: [MarkdownNote] {
+        library.notes.filter { note in
+            let matchesFolder = folderFilter == "__all__"
+                || (folderFilter == "__inbox__" ? note.folder.isEmpty : note.folder == folderFilter)
+            return matchesFolder && (search.isEmpty || note.markdown.localizedCaseInsensitiveContains(search))
+        }
     }
 
     private var liveTranscript: String {
@@ -182,42 +195,63 @@ struct NotesView: View {
     var body: some View {
         NavigationSplitView {
             List(selection: $library.selectedID) {
-                ForEach(library.folders, id: \.self) { folder in
-                    Section(folder.isEmpty ? "Inbox" : folder) {
-                        ForEach(library.notes.filter {
-                            $0.folder == folder && (search.isEmpty || $0.markdown.localizedCaseInsensitiveContains(search))
-                        }) { note in
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text(note.title).font(.headline).lineLimit(2)
-                                Text(note.modified, style: .date).font(.caption).foregroundStyle(.secondary)
-                            }
-                            .padding(.vertical, 5)
-                            .tag(note.id)
-                            .contextMenu {
-                                Button {
-                                    library.selectedID = note.id
-                                    destinationFolder = note.folder
-                                    showMoveSheet = true
-                                } label: {
-                                    Label("Move note…", systemImage: "folder.badge.arrow.forward")
-                                }
-                                Button(role: .destructive) {
-                                    library.selectedID = note.id
-                                    showDeleteConfirmation = true
-                                } label: {
-                                    Label("Delete note", systemImage: "trash")
-                                }
-                            }
-                        }
-                    }
-                    .contextMenu {
-                        if !folder.isEmpty {
+                Section("Folders") {
+                    folderRow(title: "All Notes", icon: "note.text", id: "__all__", count: library.notes.count)
+                    folderRow(
+                        title: "Inbox",
+                        icon: "tray",
+                        id: "__inbox__",
+                        count: library.notes.filter { $0.folder.isEmpty }.count
+                    )
+                    ForEach(visibleFolders, id: \.self) { folder in
+                        HStack(spacing: 8) {
+                            folderRow(
+                                title: folder,
+                                icon: "folder",
+                                id: folder,
+                                count: library.notes.filter { $0.folder == folder }.count
+                            )
                             Button {
                                 selectedFolderForRename = folder
                                 renameFolderName = folder
                                 showRenameSheet = true
                             } label: {
-                                Label("Rename folder…", systemImage: "folder.badge.gearshape")
+                                Image(systemName: "ellipsis")
+                                    .frame(width: 22, height: 22)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Rename folder")
+                        }
+                    }
+                }
+                Section("Notes") {
+                    ForEach(visibleNotes) { note in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(note.title).font(.headline).lineLimit(2)
+                            HStack(spacing: 6) {
+                                if folderFilter == "__all__", !note.folder.isEmpty {
+                                    Label(note.folder, systemImage: "folder")
+                                }
+                                Text(note.modified, style: .date)
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 5)
+                        .tag(note.id)
+                        .contextMenu {
+                            Button {
+                                library.selectedID = note.id
+                                destinationFolder = note.folder
+                                showMoveSheet = true
+                            } label: {
+                                Label("Move note…", systemImage: "folder.badge.arrow.forward")
+                            }
+                            Button(role: .destructive) {
+                                library.selectedID = note.id
+                                showDeleteConfirmation = true
+                            } label: {
+                                Label("Delete note", systemImage: "trash")
                             }
                         }
                     }
@@ -284,44 +318,53 @@ struct NotesView: View {
         }
         .toolbar {
             Button { library.create("# Untitled note\n\n") } label: { Label("New note", systemImage: "square.and.pencil") }
-            Button {
-                newFolderName = ""
-                showCreateFolderSheet = true
-            } label: { Label("New folder", systemImage: "folder.badge.plus") }
             Button { appState.toggleRecording() } label: {
                 Label(appState.isRecording ? "Stop & save" : "Record note", systemImage: appState.isRecording ? "stop.circle.fill" : "mic.fill")
             }.disabled(appState.isTranscribing)
             Toggle(isOn: $preview) { Label("Preview", systemImage: "eye") }
-            Button { library.revealFiles() } label: { Label("Show files", systemImage: "folder") }
-            Button { library.reload() } label: { Label("Refresh notes", systemImage: "arrow.clockwise") }
-            Button {
-                destinationFolder = library.notes.first(where: { $0.id == library.selectedID })?.folder ?? ""
-                showMoveSheet = true
-            } label: { Label("Move note", systemImage: "folder.badge.arrow.forward") }
-            .disabled(library.selectedID == nil)
-            Button {
-                if let selectedID = library.selectedID {
-                    appState.startNoteUpdate(noteID: selectedID)
-                }
-            } label: { Label("Update note from voice", systemImage: "wand.and.stars") }
-            .disabled(library.selectedID == nil || appState.isRecording || appState.isTranscribing)
-            Button {
-                if let selectedID = library.selectedID {
-                    appState.startNoteAppend(noteID: selectedID)
-                }
-            } label: { Label("Append voice to note", systemImage: "text.append") }
-            .disabled(library.selectedID == nil || appState.isRecording || appState.isTranscribing)
-            Button {
-                selectedFolderForRename = selectedFolder
-                renameFolderName = selectedFolder ?? ""
-                showRenameSheet = true
-            } label: { Label("Rename folder", systemImage: "folder.badge.gearshape") }
-            .disabled(selectedFolder == nil)
-            Button(role: .destructive) {
-                showDeleteConfirmation = true
-            } label: { Label("Delete note", systemImage: "trash") }
-            .disabled(library.selectedID == nil)
-            Button { NotificationCenter.default.post(name: .showSettings, object: nil) } label: { Label("Settings", systemImage: "gear") }
+            Menu {
+                Button {
+                    newFolderName = ""
+                    showCreateFolderSheet = true
+                } label: { Label("New folder", systemImage: "folder.badge.plus") }
+                Button {
+                    destinationFolder = library.notes.first(where: { $0.id == library.selectedID })?.folder ?? ""
+                    showMoveSheet = true
+                } label: { Label("Move note", systemImage: "folder.badge.arrow.forward") }
+                .disabled(library.selectedID == nil)
+                Button {
+                    selectedFolderForRename = selectedNoteFolder
+                    renameFolderName = selectedNoteFolder ?? ""
+                    showRenameSheet = true
+                } label: { Label("Rename selected folder", systemImage: "folder.badge.gearshape") }
+                .disabled(selectedNoteFolder == nil)
+                Divider()
+                Button(role: .destructive) {
+                    showDeleteConfirmation = true
+                } label: { Label("Delete note", systemImage: "trash") }
+                .disabled(library.selectedID == nil)
+            } label: {
+                Label("Organize", systemImage: "folder")
+            }
+            Menu {
+                Button {
+                    if let selectedID = library.selectedID { appState.startNoteUpdate(noteID: selectedID) }
+                } label: { Label("Update note from voice", systemImage: "wand.and.stars") }
+                .disabled(library.selectedID == nil || appState.isRecording || appState.isTranscribing)
+                Button {
+                    if let selectedID = library.selectedID { appState.startNoteAppend(noteID: selectedID) }
+                } label: { Label("Append voice to note", systemImage: "text.append") }
+                .disabled(library.selectedID == nil || appState.isRecording || appState.isTranscribing)
+            } label: {
+                Label("Voice actions", systemImage: "waveform")
+            }
+            Menu {
+                Button { library.revealFiles() } label: { Label("Show files", systemImage: "folder") }
+                Button { library.reload() } label: { Label("Refresh notes", systemImage: "arrow.clockwise") }
+                Button { NotificationCenter.default.post(name: .showSettings, object: nil) } label: { Label("Settings", systemImage: "gear") }
+            } label: {
+                Label("More", systemImage: "ellipsis.circle")
+            }
         }
         .confirmationDialog(
             "Delete this note?",
@@ -386,7 +429,7 @@ struct NotesView: View {
                     Spacer()
                     Button("Cancel") { showRenameSheet = false }
                     Button("Rename") {
-                        if let folder = selectedFolderForRename ?? selectedFolder {
+                        if let folder = selectedFolderForRename ?? selectedNoteFolder {
                             library.renameFolder(from: folder, to: renameFolderName)
                         }
                         selectedFolderForRename = nil
@@ -398,6 +441,22 @@ struct NotesView: View {
             .frame(width: 420)
         }
         .frame(minWidth: 800, minHeight: 520)
+    }
+
+    @ViewBuilder
+    private func folderRow(title: String, icon: String, id: String, count: Int) -> some View {
+        Button {
+            folderFilter = id
+        } label: {
+            HStack(spacing: 8) {
+                Label(title, systemImage: icon)
+                Spacer(minLength: 4)
+                Text(String(count)).font(.caption).foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(folderFilter == id ? Color.accentColor : Color.primary)
     }
 }
 
