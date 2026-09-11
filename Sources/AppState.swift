@@ -2111,7 +2111,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
             activeRecordingTriggerMode = nil
             currentSessionIntent = .dictation
             shortcutSessionController.reset()
-            showAccessibilityAlert()
             return false
         }
         if let startedAt {
