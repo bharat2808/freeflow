@@ -3038,6 +3038,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
         let trimmedCustomPrompt = noteSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let basePrompt = trimmedCustomPrompt.isEmpty ? MarkdownNoteStore.systemPrompt : trimmedCustomPrompt
+        let protectedExisting = MarkdownNoteStore.protectMarkdownReferences(existingNote.markdown)
         let updatePrompt: String
         let updateInput: String
         switch action {
@@ -3046,7 +3047,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
             updateInput = """
             EXISTING_MARKDOWN_NOTE:
             <note>
-            \(existingNote.markdown)
+            \(protectedExisting.markdown)
             </note>
 
             SPOKEN_UPDATE_INSTRUCTION:
@@ -3064,11 +3065,13 @@ exactly, including its Markdown syntax, label, relative path, folder name, filen
 extension. Never convert attachment references to absolute paths, plain text, or shortened
 filenames. Keep each attachment on its own line with a blank line before and after it.
 Separate newly appended attachments and text from the existing note with blank lines.
+Existing references are represented by ATTACHMENT_N placeholders. Preserve each placeholder
+exactly unless the spoken instruction explicitly asks to remove or convert that item.
 """
             updateInput = """
             EXISTING_MARKDOWN_NOTE:
             <note>
-            \(existingNote.markdown)
+            \(protectedExisting.markdown)
             </note>
 
             SPOKEN_TRANSCRIPTION_TO_APPEND:
@@ -3086,7 +3089,8 @@ Separate newly appended attachments and text from the existing note with blank l
                 customSystemPrompt: updatePrompt,
                 outputLanguage: outputLanguage
             )
-            return (result.transcript, .postProcessingSucceeded, result.prompt)
+            let restoredMarkdown = protectedExisting.restore(in: result.transcript)
+            return (restoredMarkdown, .postProcessingSucceeded, result.prompt)
         } catch {
             os_log(.error, log: recordingLog, "Note update failed: %{public}@", error.localizedDescription)
             return (existingNote.markdown, .postProcessingFailedFallback, "")
