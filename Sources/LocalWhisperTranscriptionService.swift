@@ -487,12 +487,7 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
             guard !stopped else { return false }
             audio.append(samples)
             pendingPreviewBytes += samples.count
-            let bytesPerFrame = MemoryLayout<Int16>.size
-            let maxBytes = maxBufferedFrames * bytesPerFrame
-            if audio.count > maxBytes {
-                audio.removeFirst(audio.count - maxBytes)
-            }
-            let chunkBytes = chunkFrames * bytesPerFrame
+            let chunkBytes = chunkFrames * MemoryLayout<Int16>.size
             guard !workerRunning, pendingPreviewBytes >= chunkBytes else { return false }
             workerRunning = true
             return true
@@ -518,9 +513,16 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
     }
 
     private func nextPreviewSnapshotLocked() -> PreviewSnapshot? {
-        let chunkBytes = chunkFrames * MemoryLayout<Int16>.size
+        let bytesPerFrame = MemoryLayout<Int16>.size
+        let chunkBytes = chunkFrames * bytesPerFrame
         guard pendingPreviewBytes >= chunkBytes, audio.count >= chunkBytes else { return nil }
         pendingPreviewBytes = 0
+        let maxBytes = maxBufferedFrames * bytesPerFrame
+        if audio.count > maxBytes {
+            // Trim once per inference instead of shifting a 20-second Data
+            // buffer on every microphone callback after the window fills.
+            audio = Data(audio.suffix(maxBytes))
+        }
         return PreviewSnapshot(audio: audio)
     }
 
