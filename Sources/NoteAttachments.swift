@@ -5,6 +5,7 @@ import MarkdownUI
 import PDFKit
 import SwiftUI
 import UniformTypeIdentifiers
+import WebKit
 
 struct NoteMarkdownPreview: View {
     let markdown: String
@@ -202,6 +203,14 @@ private struct TextAttachmentView: View {
     let url: URL
 
     var body: some View {
+        if ["html", "htm"].contains(url.pathExtension.lowercased()) {
+            HTMLAttachmentView(label: label, url: url)
+        } else {
+            textSourceView
+        }
+    }
+
+    private var textSourceView: some View {
         VStack(alignment: .leading, spacing: 6) {
             AttachmentHeader(label: label, icon: "doc.text", url: url)
             if let contents = try? String(contentsOf: url, encoding: .utf8) {
@@ -213,12 +222,47 @@ private struct TextAttachmentView: View {
                         .padding(12)
                 }
                 .frame(maxWidth: .infinity, minHeight: 420, maxHeight: 800)
+                .focusable(true)
                 .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
             } else {
                 Text("This text file could not be decoded as UTF-8.")
                     .foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+private struct HTMLAttachmentView: View {
+    let label: String
+    let url: URL
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            AttachmentHeader(label: label, icon: "globe", url: url)
+            HTMLWebView(url: url)
+                .frame(maxWidth: .infinity, minHeight: 520, maxHeight: 900)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(.quaternary, lineWidth: 1)
+                }
+        }
+    }
+}
+
+private struct HTMLWebView: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> WKWebView {
+        let webView = WKWebView(frame: .zero)
+        webView.allowsMagnification = true
+        webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+        return webView
+    }
+
+    func updateNSView(_ nsView: WKWebView, context: Context) {
+        guard nsView.url?.standardizedFileURL != url.standardizedFileURL else { return }
+        nsView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
     }
 }
 
