@@ -3111,6 +3111,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         let inFlightContextTask = contextCaptureTask
         let noteUpdateTargetID = self.noteUpdateTargetID
         let noteVoiceAction = self.noteVoiceAction ?? .update
+        let isNoteUpdate = noteUpdateTargetID != nil
         let noteUpdateTarget = noteUpdateTargetID.flatMap { id in
             notesLibrary.notes.first(where: { $0.id == id })
         }
@@ -3363,13 +3364,18 @@ final class AppState: ObservableObject, @unchecked Sendable {
                                !self.showPostTranscriptionUpdateReminderIfNeeded() {
                                 self.overlayManager.dismiss()
                             }
-                        } else if let noteUpdateTarget {
-                            self.pendingNoteUpdate = PendingNoteUpdate(
-                                noteID: noteUpdateTarget.id,
-                                action: self.noteVoiceAction ?? .update,
-                                markdown: trimmedFinalTranscript
-                            )
-                            self.statusText = "Preview ready"
+                        } else if isNoteUpdate {
+                            if let noteUpdateTarget {
+                                self.pendingNoteUpdate = PendingNoteUpdate(
+                                    noteID: noteUpdateTarget.id,
+                                    action: noteVoiceAction,
+                                    markdown: trimmedFinalTranscript
+                                )
+                                self.statusText = "Preview ready"
+                            } else {
+                                self.statusText = "Note update could not find the original note"
+                                self.errorMessage = "The note changed or was removed before the update completed. No new note was created."
+                            }
                             self.noteUpdateTargetID = nil
                             self.noteVoiceAction = nil
                         } else if shouldSaveAsNote {
