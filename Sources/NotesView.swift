@@ -370,7 +370,7 @@ struct NotesView: View {
                                 switch payload.kind {
                                 case .image:
                                     return "\n\n![\(payload.fileName)](\(path))\n\n"
-                                case .video, .audio:
+                                case .video, .audio, .text, .pdf, .file:
                                     return "\n\n[\(payload.fileName)](\(path))\n\n"
                                 }
                             }

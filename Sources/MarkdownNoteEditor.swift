@@ -6,6 +6,9 @@ enum NoteAttachmentKind {
     case image
     case video
     case audio
+    case text
+    case pdf
+    case file
 }
 
 struct NoteAttachmentPayload {
@@ -88,7 +91,9 @@ final class AttachmentTextView: NSTextView {
             if type?.conforms(to: .image) == true { kind = .image }
             else if type?.conforms(to: .movie) == true { kind = .video }
             else if type?.conforms(to: .audio) == true { kind = .audio }
-            else { kind = nil }
+            else if type?.conforms(to: .pdf) == true { kind = .pdf }
+            else if type?.conforms(to: .text) == true { kind = .text }
+            else { kind = .file }
             if let kind {
                 return NoteAttachmentPayload(sourceURL: url, imageData: nil, fileName: url.lastPathComponent, kind: kind)
             }
