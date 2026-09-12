@@ -1,0 +1,103 @@
+import AppKit
+import SwiftUI
+import UniformTypeIdentifiers
+
+enum NoteAttachmentKind {
+    case image
+    case video
+    case audio
+}
+
+struct NoteAttachmentPayload {
+    let sourceURL: URL?
+    let imageData: Data?
+    let fileName: String
+    let kind: NoteAttachmentKind
+}
+
+struct MarkdownNoteEditor: NSViewRepresentable {
+    let text: Binding<String>
+    let importAttachment: (NoteAttachmentPayload) -> String?
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: text) }
+
+    func makeNSView(context: Context) -> AttachmentTextView {
+        let textView = AttachmentTextView()
+        textView.delegate = context.coordinator
+        textView.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        textView.isRichText = false
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.allowsUndo = true
+        textView.drawsBackground = false
+        textView.textContainerInset = NSSize(width: 0, height: 4)
+        textView.registerForDraggedTypes([.fileURL, .tiff, .png])
+        textView.onAttachment = { payload, textView in
+            guard let insertion = importAttachment(payload) else { return false }
+            textView.insertText(insertion, replacementRange: textView.selectedRange())
+            return true
+        }
+        textView.string = text.wrappedValue
+        return textView
+    }
+
+    func updateNSView(_ nsView: AttachmentTextView, context: Context) {
+        if nsView.string != text.wrappedValue {
+            nsView.string = text.wrappedValue
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        let text: Binding<String>
+
+        init(text: Binding<String>) { self.text = text }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            text.wrappedValue = textView.string
+        }
+    }
+}
+
+final class AttachmentTextView: NSTextView {
+    var onAttachment: ((NoteAttachmentPayload, NSTextView) -> Bool)?
+
+    override func paste(_ sender: Any?) {
+        if handleAttachment(in: NSPasteboard.general) { return }
+        super.paste(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        if handleAttachment(in: sender.draggingPasteboard) { return true }
+        return super.performDragOperation(sender)
+    }
+
+    private func handleAttachment(in pasteboard: NSPasteboard) -> Bool {
+        guard let payload = Self.payload(from: pasteboard),
+              onAttachment?(payload, self) == true else { return false }
+        return true
+    }
+
+    private static func payload(from pasteboard: NSPasteboard) -> NoteAttachmentPayload? {
+        if let nsURLs = pasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [NSURL], let url = nsURLs.first as URL? {
+            let type = UTType(filenameExtension: url.pathExtension)
+            let kind: NoteAttachmentKind?
+            if type?.conforms(to: .image) == true { kind = .image }
+            else if type?.conforms(to: .movie) == true { kind = .video }
+            else if type?.conforms(to: .audio) == true { kind = .audio }
+            else { kind = nil }
+            if let kind {
+                return NoteAttachmentPayload(sourceURL: url, imageData: nil, fileName: url.lastPathComponent, kind: kind)
+            }
+        }
+
+        guard let image = NSImage(pasteboard: pasteboard),
+              let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let png = bitmap.representation(using: .png, properties: [:]) else { return nil }
+        return NoteAttachmentPayload(sourceURL: nil, imageData: png, fileName: "pasted-image.png", kind: .image)
+    }
+}
