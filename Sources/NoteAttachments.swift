@@ -151,12 +151,7 @@ private struct NoteAttachmentView: View {
                     .accessibilityLabel(label)
             }
         case let .video(label, url):
-            VStack(alignment: .leading, spacing: 6) {
-                NativeVideoView(url: url)
-                    .frame(maxWidth: 720, minHeight: 240)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                Text(label).font(.caption).foregroundStyle(.secondary)
-            }
+            VideoAttachmentView(label: label, url: url)
         case let .audio(label, url):
             AudioAttachmentView(label: label, url: url)
         case let .text(label, url):
@@ -169,17 +164,56 @@ private struct NoteAttachmentView: View {
     }
 }
 
+private struct VideoAttachmentView: View {
+    let label: String
+    let url: URL
+    @State private var isFocused = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Label(label, systemImage: "film")
+                    .font(.headline)
+                    .lineLimit(1)
+                Spacer()
+                AttachmentFocusHint(isFocused: isFocused)
+                Button {
+                    NSWorkspace.shared.open(url)
+                } label: {
+                    Label("Open externally", systemImage: "arrow.up.right.square")
+                }
+                .buttonStyle(.borderless)
+                .help("Open in the default app")
+            }
+            NativeVideoView(
+                url: url,
+                isFocused: $isFocused
+            )
+            .frame(maxWidth: 720, minHeight: 240)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isFocused ? Color.accentColor : Color.secondary.opacity(0.25), lineWidth: 1)
+            }
+        }
+    }
+}
+
 private struct NativeVideoView: NSViewRepresentable {
     let url: URL
+    @Binding var isFocused: Bool
 
-    func makeNSView(context: Context) -> AVPlayerView {
-        let view = AVPlayerView()
+    func makeNSView(context: Context) -> FocusToggleVideoPlayerView {
+        let view = FocusToggleVideoPlayerView()
         view.controlsStyle = .floating
         view.player = AVPlayer(url: url)
+        view.isDocumentFocused = isFocused
+        view.onToggleFocus = { isFocused.toggle() }
         return view
     }
 
-    func updateNSView(_ nsView: AVPlayerView, context: Context) {
+    func updateNSView(_ nsView: FocusToggleVideoPlayerView, context: Context) {
+        nsView.isDocumentFocused = isFocused
         if nsView.player?.currentItem?.asset as? AVURLAsset == nil ||
             (nsView.player?.currentItem?.asset as? AVURLAsset)?.url != url {
             nsView.player?.pause()
@@ -187,9 +221,28 @@ private struct NativeVideoView: NSViewRepresentable {
         }
     }
 
-    static func dismantleNSView(_ nsView: AVPlayerView, coordinator: ()) {
+    static func dismantleNSView(_ nsView: FocusToggleVideoPlayerView, coordinator: ()) {
         nsView.player?.pause()
         nsView.player = nil
+    }
+}
+
+private final class FocusToggleVideoPlayerView: AVPlayerView {
+    var isDocumentFocused = false
+    var onToggleFocus: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        onToggleFocus?()
+        isDocumentFocused.toggle()
+        super.mouseDown(with: event)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        if isDocumentFocused {
+            super.scrollWheel(with: event)
+        } else {
+            forwardScrollWheelToAncestor(event)
+        }
     }
 }
 
@@ -254,6 +307,9 @@ private struct TextAttachmentView: View {
                 .font(.headline)
                 .lineLimit(1)
             Spacer()
+            if !isEditing {
+                AttachmentFocusHint(isFocused: displayedContentIsFocused)
+            }
             if isHTML {
                 Button {
                     isPreviewingHTML.toggle()
@@ -290,6 +346,10 @@ private struct TextAttachmentView: View {
 
     private var isHTML: Bool {
         ["html", "htm"].contains(url.pathExtension.lowercased())
+    }
+
+    private var displayedContentIsFocused: Bool {
+        isHTML && isPreviewingHTML ? isHTMLPreviewFocused : isFocused
     }
 
     private var draftBinding: Binding<String> {
@@ -394,8 +454,11 @@ private final class FocusGatedScrollView: NSScrollView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        guard isDocumentFocused else { return }
-        super.scrollWheel(with: event)
+        if isDocumentFocused {
+            super.scrollWheel(with: event)
+        } else {
+            forwardScrollWheelToAncestor(event)
+        }
     }
 }
 
@@ -442,8 +505,11 @@ private final class FocusToggleWebView: WKWebView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        guard isDocumentFocused else { return }
-        super.scrollWheel(with: event)
+        if isDocumentFocused {
+            super.scrollWheel(with: event)
+        } else {
+            forwardScrollWheelToAncestor(event)
+        }
     }
 }
 
@@ -451,6 +517,7 @@ private struct AttachmentHeader: View {
     let label: String
     let icon: String
     let url: URL
+    let isFocused: Bool
 
     var body: some View {
         HStack(spacing: 8) {
@@ -458,6 +525,7 @@ private struct AttachmentHeader: View {
                 .font(.headline)
                 .lineLimit(1)
             Spacer()
+            AttachmentFocusHint(isFocused: isFocused)
             Button {
                 NSWorkspace.shared.open(url)
             } label: {
@@ -469,6 +537,21 @@ private struct AttachmentHeader: View {
     }
 }
 
+private struct AttachmentFocusHint: View {
+    let isFocused: Bool
+
+    var body: some View {
+        Label(
+            isFocused ? "Focused" : "Tap to focus",
+            systemImage: isFocused ? "checkmark.circle.fill" : "cursorarrow.click"
+        )
+        .font(.caption)
+        .foregroundStyle(isFocused ? Color.accentColor : Color.secondary)
+        .fixedSize()
+        .accessibilityHidden(true)
+    }
+}
+
 private struct FocusablePDFAttachmentView: View {
     let label: String
     let url: URL
@@ -476,7 +559,7 @@ private struct FocusablePDFAttachmentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            AttachmentHeader(label: label, icon: "doc.richtext", url: url)
+            AttachmentHeader(label: label, icon: "doc.richtext", url: url, isFocused: isFocused)
             PDFKitView(url: url, isFocused: $isFocused)
                 .frame(maxWidth: .infinity, minHeight: 420, maxHeight: 800)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -518,8 +601,25 @@ private final class FocusTogglePDFView: PDFView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        guard isDocumentFocused else { return }
-        super.scrollWheel(with: event)
+        if isDocumentFocused {
+            super.scrollWheel(with: event)
+        } else {
+            forwardScrollWheelToAncestor(event)
+        }
+    }
+}
+
+private extension NSView {
+    func forwardScrollWheelToAncestor(_ event: NSEvent) {
+        var ancestor = superview
+        while let view = ancestor {
+            if let scrollView = view as? NSScrollView {
+                scrollView.scrollWheel(with: event)
+                return
+            }
+            ancestor = view.superview
+        }
+        nextResponder?.scrollWheel(with: event)
     }
 }
 
