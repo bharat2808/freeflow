@@ -396,18 +396,28 @@ struct NotesView: View {
 
     private func selectedText(in note: MarkdownNote) -> String? {
         let source = note.markdown as NSString
-        let location = min(max(editorSelection.location, 0), source.length)
-        let length = min(max(editorSelection.length, 0), source.length - location)
-        guard length > 0 else { return nil }
-        return source.substring(with: NSRange(location: location, length: length))
+        let range = selectedRange(in: note)
+        guard range.length > 0 else { return nil }
+        return source.substring(with: range)
+    }
+
+    private func selectedRange(in note: MarkdownNote) -> NSRange {
+        let length = (note.markdown as NSString).length
+        guard editorSelection.length > 0 else {
+            return NSRange(location: 0, length: length)
+        }
+        let location = min(max(editorSelection.location, 0), length)
+        let selectionLength = min(max(editorSelection.length, 0), length - location)
+        return NSRange(location: location, length: selectionLength)
     }
 
     private func runTextPreset(_ preset: TextActionPreset, for note: MarkdownNote) {
         guard !isPresetProcessing else { return }
         guard let selectedText = selectedText(in: note) else {
-            presetError = "Select text in the note before choosing a preset."
+            presetError = "The note is empty. Add some text before choosing a preset."
             return
         }
+        editorSelection = selectedRange(in: note)
         presetError = nil
         isPresetProcessing = true
         Task {
@@ -436,9 +446,10 @@ struct NotesView: View {
         guard !isPresetProcessing else { return }
         guard let note = library.notes.first(where: { $0.id == library.selectedID }),
               let selectedText = selectedText(in: note) else {
-            presetError = "Select text in the note before describing a change."
+            presetError = "The note is empty. Add some text before describing a change."
             return
         }
+        editorSelection = selectedRange(in: note)
         let prompt = customTextPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else {
             presetError = "Describe the change you want first."
@@ -507,9 +518,6 @@ struct NotesView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 12))
-            Text("Select note text, then choose a preset to transform it without recording audio.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
             Button("Apply custom change") { runCustomTextPrompt() }
                 .buttonStyle(.borderedProminent)
                 .disabled(isPresetProcessing || customTextPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
