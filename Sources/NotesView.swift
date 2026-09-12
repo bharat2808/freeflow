@@ -271,7 +271,7 @@ struct NotesView: View {
                         }
                     }
                 }
-                Section("Notes") {
+                Section {
                     ForEach(visibleNotes) { note in
                         HStack(spacing: 8) {
                             VStack(alignment: .leading, spacing: 5) {
@@ -314,6 +314,26 @@ struct NotesView: View {
                                 Label("Delete note", systemImage: "trash")
                             }
                         }
+                    }
+                } header: {
+                    HStack {
+                        Text("Notes")
+                        Spacer()
+                        Button {
+                            library.create("# Untitled note\n\n")
+                        } label: {
+                            Image(systemName: "note.text.badge.plus")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("New note")
+                        Button {
+                            newFolderName = ""
+                            showCreateFolderSheet = true
+                        } label: {
+                            Image(systemName: "folder.badge.plus")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("New folder")
                     }
                 }
             }
@@ -401,30 +421,6 @@ struct NotesView: View {
                 Label(appState.isRecording ? "Stop & save" : "Record note", systemImage: appState.isRecording ? "stop.circle.fill" : "mic.fill")
             }.disabled(appState.isTranscribing)
             Toggle(isOn: $preview) { Label("Preview", systemImage: "eye") }
-            Menu {
-                Button {
-                    newFolderName = ""
-                    showCreateFolderSheet = true
-                } label: { Label("New folder", systemImage: "folder.badge.plus") }
-                Button {
-                    destinationFolder = library.notes.first(where: { $0.id == library.selectedID })?.folder ?? ""
-                    showMoveSheet = true
-                } label: { Label("Move note", systemImage: "folder.badge.arrow.forward") }
-                .disabled(library.selectedID == nil)
-                Button {
-                    selectedFolderForRename = selectedNoteFolder
-                    renameFolderName = selectedNoteFolder ?? ""
-                    showRenameSheet = true
-                } label: { Label("Rename selected folder", systemImage: "folder.badge.gearshape") }
-                .disabled(selectedNoteFolder == nil)
-                Divider()
-                Button(role: .destructive) {
-                    showDeleteConfirmation = true
-                } label: { Label("Delete note", systemImage: "trash") }
-                .disabled(library.selectedID == nil)
-            } label: {
-                Label("Organize", systemImage: "folder")
-            }
             Menu {
                 Button {
                     if let selectedID = library.selectedID { appState.startNoteUpdate(noteID: selectedID) }
