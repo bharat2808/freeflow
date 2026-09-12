@@ -863,18 +863,44 @@ struct NotesView: View {
                     Text("Original")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
-                    Text(preview.originalText)
+                    Text(highlightedDiff(preview.originalText, comparedTo: preview.replacementText))
                         .textSelection(.enabled)
                     Divider()
                     Text("\(preview.title) result")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
-                    Markdown(preview.replacementText, baseURL: MarkdownNoteStore.standard.noteFolderURL(for: note))
+                    Text(highlightedDiff(preview.replacementText, comparedTo: preview.originalText))
+                        .textSelection(.enabled)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(28)
             }
         }
+    }
+
+    private func highlightedDiff(_ text: String, comparedTo other: String) -> AttributedString {
+        let characters = Array(text)
+        let otherCharacters = Array(other)
+        let prefixCount = zip(characters, otherCharacters).prefix { $0 == $1 }.count
+        let suffixLimit = min(characters.count, otherCharacters.count) - prefixCount
+        let suffixCount: Int
+        if suffixLimit > 0 {
+            suffixCount = zip(
+                characters.reversed().prefix(suffixLimit),
+                otherCharacters.reversed().prefix(suffixLimit)
+            ).prefix { $0 == $1 }.count
+        } else {
+            suffixCount = 0
+        }
+        let changedStart = prefixCount
+        let changedEnd = max(changedStart, characters.count - suffixCount)
+        var attributed = AttributedString(text)
+        if changedStart < changedEnd {
+            let start = attributed.index(attributed.startIndex, offsetByCharacters: changedStart)
+            let end = attributed.index(attributed.startIndex, offsetByCharacters: changedEnd)
+            attributed[start..<end].backgroundColor = .yellow.opacity(0.35)
+        }
+        return attributed
     }
 
     private func chooseAttachment(for note: MarkdownNote) {
