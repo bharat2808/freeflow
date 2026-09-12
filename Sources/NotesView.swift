@@ -686,9 +686,8 @@ struct NotesView: View {
             } label: {
                 Image(systemName: "arrow.uturn.backward")
                     .resizable()
-                    .scaledToFit()
                     .frame(width: 18, height: 18)
-                    .frame(width: 28, height: 28)
+                    .frame(width: 40, height: 32)
             }
             .disabled(!library.canUndoSelectedNote)
             .accessibilityLabel("Undo")
@@ -707,20 +706,18 @@ struct NotesView: View {
             } label: {
                 Image(systemName: "wand.and.stars")
                     .resizable()
-                    .scaledToFit()
                     .frame(width: 18, height: 18)
-                    .frame(width: 28, height: 28)
+                    .frame(width: 40, height: 32)
             }
             .disabled(appState.isRecording || appState.isTranscribing)
             .accessibilityLabel("Note actions")
             .help("Update or append to this note")
-            .disabled(appState.isRecording || appState.isTranscribing)
+            .menuIndicator(.hidden)
             Toggle(isOn: $preview) {
                 Image(systemName: "eye")
                     .resizable()
-                    .scaledToFit()
                     .frame(width: 18, height: 18)
-                    .frame(width: 28, height: 28)
+                    .frame(width: 40, height: 32)
             }
             .toggleStyle(.button)
             .accessibilityLabel("Preview")
