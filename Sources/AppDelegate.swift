@@ -90,6 +90,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                                   styleMask: [.titled, .closable, .resizable, .miniaturizable],
                                   backing: .buffered, defer: false)
             window.title = "FreeFlow Notes"
+            window.titleVisibility = .hidden
             window.contentView = NSHostingView(rootView: NotesView(library: appState.notesLibrary, searchState: notesSearchState).environmentObject(appState))
             let titlebarAccessory = NotesTitlebarAccessoryViewController(library: appState.notesLibrary, searchState: notesSearchState)
             titlebarAccessory.layoutAttribute = .right
