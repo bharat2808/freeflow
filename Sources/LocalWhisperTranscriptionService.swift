@@ -454,7 +454,6 @@ private extension Data {
 final class LocalWhisperPreviewSession: @unchecked Sendable {
     private struct PreviewSnapshot {
         let audio: Data
-        let startsAfterRecordingBeginning: Bool
     }
 
     private let transcribe: @Sendable (Data, Int) async throws -> String
@@ -462,8 +461,6 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
     private let stateLock = OSAllocatedUnfairLock(initialState: ())
     private var audio = Data()
     private var pendingPreviewBytes = 0
-    private var hasDroppedAudio = false
-    private var committedTranscript = ""
     private var stopped = false
     private var workerRunning = false
     private var workerTask: Task<Void, Never>?
@@ -490,7 +487,6 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
             let maxBytes = maxBufferedFrames * bytesPerFrame
             if audio.count > maxBytes {
                 audio.removeFirst(audio.count - maxBytes)
-                hasDroppedAudio = true
             }
             let chunkBytes = chunkFrames * bytesPerFrame
             guard !workerRunning, pendingPreviewBytes >= chunkBytes else { return false }
@@ -521,10 +517,7 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
         let chunkBytes = chunkFrames * MemoryLayout<Int16>.size
         guard pendingPreviewBytes >= chunkBytes, audio.count >= chunkBytes else { return nil }
         pendingPreviewBytes = 0
-        return PreviewSnapshot(
-            audio: audio,
-            startsAfterRecordingBeginning: hasDroppedAudio
-        )
+        return PreviewSnapshot(audio: audio)
     }
 
     private func drainAudio() async {
@@ -561,19 +554,12 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
             if containsSpeech(snapshot.audio) {
                 let transcript = try await transcribe(snapshot.audio, sampleRate)
                 try Task.checkCancellation()
-                if !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    let committed: String = stateLock.withLock {
-                        if snapshot.startsAfterRecordingBeginning {
-                            committedTranscript = MarkdownNoteStore.mergeTranscripts([
-                                committedTranscript,
-                                transcript,
-                            ])
-                        } else {
-                            committedTranscript = transcript
-                        }
-                        return committedTranscript
-                    }
-                    onUpdate(committed)
+                let preview = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !preview.isEmpty {
+                    // Each snapshot is a rolling window and may revise words
+                    // from the prior result. Replacing the provisional preview
+                    // avoids duplicating those revised overlapping passages.
+                    onUpdate(preview)
                 }
             }
         } catch is CancellationError {
