@@ -235,7 +235,6 @@ final class LocalWhisperTranscriptionService: AudioTranscriber {
     private let modelURL: URL
     private let language: String?
     private let timeoutSeconds: TimeInterval
-    private let inProcessSession: InProcessWhisperSession?
 
     init(
         executablePath: String,
@@ -258,10 +257,6 @@ final class LocalWhisperTranscriptionService: AudioTranscriber {
         let trimmedLanguage = language?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.language = (trimmedLanguage?.isEmpty == false) ? trimmedLanguage : nil
         self.timeoutSeconds = max(1, timeoutSeconds)
-        self.inProcessSession = InProcessWhisperSession(
-            modelPath: model.path,
-            language: self.language
-        )
     }
 
     func transcribe(fileURL: URL) async throws -> String {
@@ -300,8 +295,15 @@ final class LocalWhisperTranscriptionService: AudioTranscriber {
     /// same 16 kHz mono PCM16 used by the saved recording.
     func transcribePCM16(_ samples: Data, sampleRate: Int = 16_000) async throws -> String {
         guard !samples.isEmpty else { throw LocalWhisperError.emptyTranscript }
-        if sampleRate == 16_000, let inProcessSession {
-            return try inProcessSession.transcribe(pcm16: samples)
+        if sampleRate == 16_000,
+           let previewSession = InProcessWhisperSession(
+               modelPath: modelURL.path,
+               language: language
+           ) {
+            // A Whisper context can retain decoder state after whisper_full.
+            // Keep preview chunks isolated so one completed chunk cannot
+            // leave the shared context stalled for every later update.
+            return try previewSession.transcribe(pcm16: samples)
         }
         let temporaryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("freeflow-whisper-preview-\(UUID().uuidString).wav")
