@@ -20,7 +20,6 @@ struct NoteMarkdownPreview: View {
                     ExternalLinkView(label: webLink.label, url: webLink.url)
                 } else if !block.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Markdown(block, baseURL: store.noteFolderURL(for: note))
-                        .markdownTheme(.gitHub)
                         .environment(\.openURL, OpenURLAction { url in
                             NSWorkspace.shared.open(url)
                             return .handled
@@ -80,13 +79,13 @@ private struct ExternalLinkView: View {
         } label: {
             HStack(spacing: 6) {
                 Text(label)
-                    .underline()
                 Image(systemName: "arrow.up.right")
                     .font(.caption.weight(.semibold))
-                    .opacity(isHovered ? 1 : 0.45)
+                    .foregroundStyle(.secondary)
+                    .opacity(isHovered ? 1 : 0.7)
                     .offset(x: isHovered ? 2 : 0)
             }
-            .foregroundStyle(.tint)
+            .foregroundStyle(.primary)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
