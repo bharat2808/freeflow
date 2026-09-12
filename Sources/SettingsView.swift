@@ -626,10 +626,114 @@ struct SettingsView: View {
                     RunLogView()
                 case .debug:
                     DebugSettingsView()
+                case .notesConnector:
+                    NotesConnectorSettingsView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+}
+
+struct NotesConnectorSettingsView: View {
+    @State private var selectedClient = "codex"
+    @State private var commandOutput: String?
+    @State private var copied = false
+
+    private var connectorURL: URL? {
+        Bundle.main.url(forResource: "freeflow-notes-mcp", withExtension: nil)
+    }
+
+    private var connectorPath: String {
+        connectorURL?.path ?? "Connector is not present in this app bundle"
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Notes Connector")
+                    .font(.title2.weight(.bold))
+                Text("Connect Codex, Claude, Ollama, or another MCP-compatible agent to your local FreeFlow notes.")
+                    .foregroundStyle(.secondary)
+
+                SettingsCard("Bundled connector", icon: "shippingbox") {
+                    Text(connectorPath)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                    HStack {
+                        Picker("Client", selection: $selectedClient) {
+                            Text("Codex").tag("codex")
+                            Text("Claude").tag("claude")
+                            Text("Generic MCP client").tag("generic")
+                        }
+                        Button(copied ? "Copied" : "Copy configuration") {
+                            copyConfiguration()
+                        }
+                        .disabled(connectorURL == nil)
+                        Button("Run doctor") {
+                            runConnector(arguments: ["doctor"])
+                        }
+                        .disabled(connectorURL == nil)
+                    }
+                    if let commandOutput {
+                        Text(commandOutput)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
+                            .cornerRadius(6)
+                    }
+                }
+
+                SettingsCard("Manual command", icon: "terminal") {
+                    Text("\"\(connectorPath)\" serve --stdio")
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                    Text("The connector exposes usage_guidelines, notes, and BM25-ranked search_notes. Access is limited to the FreeFlow notes directory.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(24)
+        }
+    }
+
+    private func copyConfiguration() {
+        runConnector(arguments: ["config", "--client", selectedClient])
+        guard let commandOutput else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(commandOutput, forType: .string)
+        copied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+    }
+
+    private func runConnector(arguments: [String]) {
+        guard let connectorURL else {
+            commandOutput = "The connector executable is missing from this app bundle. Rebuild with `make ARCH=\(appArchitecture()) CODESIGN_IDENTITY=-`."
+            return
+        }
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = connectorURL
+        process.arguments = arguments
+        process.standardOutput = pipe
+        process.standardError = pipe
+        do {
+            try process.run()
+            process.waitUntilExit()
+            commandOutput = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "No output"
+        } catch {
+            commandOutput = error.localizedDescription
+        }
+    }
+
+    private func appArchitecture() -> String {
+        #if arch(arm64)
+        return "arm64"
+        #else
+        return "x86_64"
+        #endif
     }
 }
 

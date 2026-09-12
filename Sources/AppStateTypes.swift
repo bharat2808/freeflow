@@ -6,6 +6,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case macros
     case runLog
     case debug
+    case notesConnector
 
     var id: String { rawValue }
 
@@ -22,6 +23,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .macros: return "Voice Macros"
         case .runLog: return "Run Log"
         case .debug: return "Debug"
+        case .notesConnector: return "Notes Connector"
         }
     }
 
@@ -32,6 +34,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .macros: return "music.mic"
         case .runLog: return "clock.arrow.circlepath"
         case .debug: return "wrench.and.screwdriver"
+        case .notesConnector: return "externaldrive.connected.to.line.below"
         }
     }
 }
