@@ -681,6 +681,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private var pendingManualCommandInvocation = false
     private var pendingNoteRecording = false
     private var activeNoteRecording = false
+    private var activeNewNoteID: UUID?
     private var activeNoteUpdateTargetID: UUID?
     private var activeNoteUpdateAction: NoteVoiceAction?
     private var pendingShortcutStartTask: Task<Void, Never>?
@@ -1888,6 +1889,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
     /// menu-bar dictation continues to paste into the focused text field.
     func startNoteRecording() {
         guard !isRecording, !isTranscribing else { return }
+        guard let noteID = notesLibrary.createEmpty() else { return }
+        activeNewNoteID = noteID
         activeNoteUpdateTargetID = nil
         activeNoteUpdateAction = nil
         pendingNoteRecording = true
@@ -3128,6 +3131,7 @@ Separate newly appended attachments and text from the existing note with blank l
         let noteUpdateTargetID = activeNoteUpdateTargetID ?? self.noteUpdateTargetID
         let noteVoiceAction = activeNoteUpdateAction ?? self.noteVoiceAction ?? .update
         let isNoteUpdate = noteUpdateTargetID != nil
+        let newNoteTargetID = shouldSaveAsNote ? activeNewNoteID : nil
         let noteUpdateTarget = noteUpdateTargetID.flatMap { id in
             notesLibrary.notes.first(where: { $0.id == id })
         }
@@ -3394,6 +3398,11 @@ Separate newly appended attachments and text from the existing note with blank l
                             }
                             self.noteUpdateTargetID = nil
                             self.noteVoiceAction = nil
+                        } else if let newNoteTargetID {
+                            let saved = self.notesLibrary.update(id: newNoteTargetID, markdown: trimmedFinalTranscript)
+                            self.statusText = saved ? "Note saved" : "Note could not be saved"
+                            self.activeNewNoteID = nil
+                            NotificationCenter.default.post(name: .showNotes, object: nil)
                         } else if shouldSaveAsNote {
                             let saved = self.notesLibrary.create(trimmedFinalTranscript)
                             self.statusText = saved ? completionStatusText : saveFailureStatusText
