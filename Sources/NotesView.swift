@@ -54,6 +54,21 @@ final class NotesLibrary: ObservableObject {
         }
     }
 
+    @discardableResult
+    func createEmpty() -> UUID? {
+        let note = MarkdownNote(id: UUID(), markdown: "# Untitled note\n\n", modified: Date())
+        do {
+            try store.save(note)
+            notes.insert(note, at: 0)
+            selectedID = note.id
+            error = nil
+            return note.id
+        } catch {
+            self.error = "Could not create note: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
     func edit(id: UUID, markdown: String) {
         guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
         if editUndoBaselines[id] == nil {
@@ -325,7 +340,7 @@ struct NotesView: View {
                     HStack {
                         Text("Notes")
                         Spacer()
-                        Button { library.create("# Untitled note\n\n") } label: {
+                        Button { library.createEmpty() } label: {
                             Image(systemName: "note.text.badge.plus")
                                 .font(.title3)
                                 .frame(width: 34, height: 34)
