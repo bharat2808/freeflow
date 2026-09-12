@@ -60,6 +60,8 @@ struct ProviderSettingsFields: View {
     @State private var isDownloadingLocalWhisperModel = false
     @State private var localWhisperDownloadProgress = 0.0
     @State private var localWhisperDownloadError: String?
+    @State private var isInstallingLocalWhisper = false
+    @State private var localWhisperInstallMessage: String?
     /// Updated by the cooldown timer so warning labels clear at expiry without user interaction.
     @State private var now: Date = Date()
     /// Tracks whether the Settings window is the frontmost active window.
@@ -129,6 +131,29 @@ struct ProviderSettingsFields: View {
                 await MainActor.run {
                     localWhisperDownloadError = "Could not download the Whisper model: \(error.localizedDescription)"
                     isDownloadingLocalWhisperModel = false
+                }
+            }
+        }
+    }
+
+    private func installLocalWhisper() {
+        guard !isInstallingLocalWhisper else { return }
+        isInstallingLocalWhisper = true
+        localWhisperDownloadError = nil
+        Task {
+            do {
+                let executableURL = try await LocalWhisperInstaller.installWhisperCpp { message in
+                    Task { @MainActor in localWhisperInstallMessage = message }
+                }
+                await MainActor.run {
+                    appState.localWhisperExecutablePath = executableURL.path
+                    localWhisperInstallMessage = "Installed at (executableURL.path)"
+                    isInstallingLocalWhisper = false
+                }
+            } catch {
+                await MainActor.run {
+                    localWhisperDownloadError = error.localizedDescription
+                    isInstallingLocalWhisper = false
                 }
             }
         }
@@ -354,6 +379,15 @@ struct ProviderSettingsFields: View {
 
                     HStack(spacing: 10) {
                         Button {
+                            installLocalWhisper()
+                        } label: {
+                            Label(
+                                isInstallingLocalWhisper ? "Installing…" : (LocalWhisperInstaller.installedExecutableURL == nil ? "Install whisper.cpp" : "Installed"),
+                                systemImage: LocalWhisperInstaller.installedExecutableURL == nil ? "arrow.down.circle" : "checkmark.circle.fill"
+                            )
+                        }
+                        .disabled(isInstallingLocalWhisper || LocalWhisperInstaller.installedExecutableURL != nil)
+                        Button {
                             downloadBaseLocalWhisperModel()
                         } label: {
                             Label(
@@ -374,6 +408,14 @@ struct ProviderSettingsFields: View {
                             ProgressView(value: localWhisperDownloadProgress)
                                 .frame(width: 120)
                         }
+                        if isInstallingLocalWhisper {
+                            ProgressView()
+                        }
+                    }
+                    if let localWhisperInstallMessage {
+                        Text(localWhisperInstallMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     Text("Downloads the standard English model to ~/.cache/whisper (the download is about 142 MB).")
                         .font(.caption)
