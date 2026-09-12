@@ -105,11 +105,27 @@ enum LocalWhisperTranscriptionServiceTests {
         for _ in 0..<200 where state.updateCount < 2 {
             try await Task.sleep(for: .milliseconds(10))
         }
+        let twentyOneSeconds = Data(
+            repeating: chunk[0],
+            count: 16_000 * 21 * MemoryLayout<Int16>.size
+        )
+        session.appendPCM16(twentyOneSeconds)
+
+        for _ in 0..<200 where state.updateCount < 3 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
         session.stop()
-        TestSupport.expectEqual(state.recordedUpdates, ["chunk 1", "chunk 1 chunk 2"])
+        TestSupport.expectEqual(
+            state.recordedUpdates,
+            ["chunk 1", "chunk 1 chunk 2", "chunk 1 chunk 2 chunk 3"]
+        )
         TestSupport.expectEqual(
             state.recordedSampleByteCounts,
-            [threeSeconds.count, threeSeconds.count * 2]
+            [
+                threeSeconds.count,
+                threeSeconds.count * 2,
+                16_000 * 20 * MemoryLayout<Int16>.size,
+            ]
         )
     }
 }
