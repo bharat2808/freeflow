@@ -188,6 +188,7 @@ struct NotesView: View {
     @State private var selectedFolderForRename: String?
     @State private var showDeleteConfirmation = false
     @State private var expandedFolders: Set<String> = []
+    @State private var collapsedFolders: Set<String> = []
 
     private var selectedNoteFolder: String? {
         guard let selectedID = library.selectedID else { return nil }
@@ -260,8 +261,8 @@ struct NotesView: View {
                             library.create("# Untitled note\n\n")
                         } label: {
                             Image(systemName: "note.text.badge.plus")
-                                .font(.body)
-                                .frame(width: 28, height: 28)
+                                .font(.title3)
+                                .frame(width: 34, height: 34)
                         }
                         .buttonStyle(.borderless)
                         .help("New note")
@@ -270,8 +271,8 @@ struct NotesView: View {
                             showCreateFolderSheet = true
                         } label: {
                             Image(systemName: "folder.badge.plus")
-                                .font(.body)
-                                .frame(width: 28, height: 28)
+                                .font(.title3)
+                                .frame(width: 34, height: 34)
                         }
                         .buttonStyle(.borderless)
                         .help("New folder")
@@ -357,7 +358,6 @@ struct NotesView: View {
             }
         }
         .toolbar {
-            Button { library.create("# Untitled note\n\n") } label: { Label("New note", systemImage: "square.and.pencil") }
             Button { appState.toggleNoteRecording() } label: {
                 Label(appState.isRecording ? "Stop & save" : "Record note", systemImage: appState.isRecording ? "stop.circle.fill" : "mic.fill")
             }.disabled(appState.isTranscribing)
@@ -460,7 +460,21 @@ struct NotesView: View {
     }
 
     private func folderHeader(_ folder: String) -> some View {
-        HStack(spacing: 8) {
+        let isCollapsed = collapsedFolders.contains(folder)
+        return HStack(spacing: 8) {
+            Button {
+                if isCollapsed {
+                    collapsedFolders.remove(folder)
+                } else {
+                    collapsedFolders.insert(folder)
+                }
+            } label: {
+                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                    .font(.caption.weight(.bold))
+                    .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.borderless)
+            .help(isCollapsed ? "Expand folder" : "Collapse folder")
             Label(folder.isEmpty ? "Inbox" : folder, systemImage: folder.isEmpty ? "tray" : "folder")
                 .font(.headline)
             Spacer(minLength: 4)
@@ -526,19 +540,21 @@ struct NotesView: View {
         let displayedFolderNotes = isExpanded ? folderNotes : Array(folderNotes.prefix(5))
         Group {
             folderHeader(folder)
-            dateGroupRows(folder: folder, folderNotes: displayedFolderNotes)
-            if folderNotes.count > 5 {
-                Button(isExpanded ? "Show less" : "Show more") {
-                    if isExpanded {
-                        expandedFolders.remove(folder)
-                    } else {
-                        expandedFolders.insert(folder)
+            if !collapsedFolders.contains(folder) {
+                dateGroupRows(folder: folder, folderNotes: displayedFolderNotes)
+                if folderNotes.count > 5 {
+                    Button(isExpanded ? "Show less" : "Show more") {
+                        if isExpanded {
+                            expandedFolders.remove(folder)
+                        } else {
+                            expandedFolders.insert(folder)
+                        }
                     }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 22)
+                    .padding(.vertical, 4)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .padding(.leading, 22)
-                .padding(.vertical, 4)
             }
         }
         .onDrop(of: [UTType.text.identifier], isTargeted: nil) { providers in
