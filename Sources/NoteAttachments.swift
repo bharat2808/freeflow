@@ -238,39 +238,11 @@ private final class FocusToggleVideoPlayerView: AVPlayerView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        guard isDocumentFocused else {
-            forwardScrollWheelToAncestor(event)
-            return
-        }
-        if let scrollView = internalScrollView(in: self) {
-            let clipView = scrollView.contentView
-            var origin = clipView.bounds.origin
-            origin.x -= event.scrollingDeltaX
-            origin.y += event.scrollingDeltaY
-
-            let documentSize = scrollView.documentView?.frame.size ?? .zero
-            let visibleSize = clipView.bounds.size
-            let maximumX = max(0, documentSize.width - visibleSize.width)
-            let maximumY = max(0, documentSize.height - visibleSize.height)
-            origin.x = min(max(0, origin.x), maximumX)
-            origin.y = min(max(0, origin.y), maximumY)
-            clipView.setBoundsOrigin(origin)
-            scrollView.reflectScrolledClipView(clipView)
-        } else {
+        if isDocumentFocused {
             super.scrollWheel(with: event)
+        } else {
+            forwardScrollWheelToAncestor(event)
         }
-    }
-
-    private func internalScrollView(in view: NSView) -> NSScrollView? {
-        for child in view.subviews {
-            if let scrollView = child as? NSScrollView {
-                return scrollView
-            }
-            if let scrollView = internalScrollView(in: child) {
-                return scrollView
-            }
-        }
-        return nil
     }
 }
 
@@ -636,11 +608,38 @@ private final class FocusTogglePDFView: PDFView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        if isDocumentFocused {
-            super.scrollWheel(with: event)
-        } else {
+        guard isDocumentFocused else {
             forwardScrollWheelToAncestor(event)
+            return
         }
+        guard let scrollView = internalScrollView(in: self) else {
+            super.scrollWheel(with: event)
+            return
+        }
+
+        let clipView = scrollView.contentView
+        var origin = clipView.bounds.origin
+        origin.x -= event.scrollingDeltaX
+        origin.y += event.scrollingDeltaY
+
+        let documentSize = scrollView.documentView?.frame.size ?? .zero
+        let visibleSize = clipView.bounds.size
+        origin.x = min(max(0, origin.x), max(0, documentSize.width - visibleSize.width))
+        origin.y = min(max(0, origin.y), max(0, documentSize.height - visibleSize.height))
+        clipView.setBoundsOrigin(origin)
+        scrollView.reflectScrolledClipView(clipView)
+    }
+
+    private func internalScrollView(in view: NSView) -> NSScrollView? {
+        for child in view.subviews {
+            if let scrollView = child as? NSScrollView {
+                return scrollView
+            }
+            if let scrollView = internalScrollView(in: child) {
+                return scrollView
+            }
+        }
+        return nil
     }
 }
 
