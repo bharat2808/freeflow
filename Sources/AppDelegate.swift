@@ -5,6 +5,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var setupWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private var notesWindow: NSWindow?
+    private let notesSearchState = NotesSearchState()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NetworkMonitor.shared.start()
@@ -89,7 +90,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                                   styleMask: [.titled, .closable, .resizable, .miniaturizable],
                                   backing: .buffered, defer: false)
             window.title = "FreeFlow Notes"
-            window.contentView = NSHostingView(rootView: NotesView(library: appState.notesLibrary).environmentObject(appState))
+            window.contentView = NSHostingView(rootView: NotesView(library: appState.notesLibrary, searchState: notesSearchState).environmentObject(appState))
+            let titlebarAccessory = NotesTitlebarAccessoryViewController(library: appState.notesLibrary, searchState: notesSearchState)
+            titlebarAccessory.layoutAttribute = .right
+            window.addTitlebarAccessoryViewController(titlebarAccessory)
+            titlebarAccessory.view.setFrameSize(NSSize(width: 296, height: 28))
             window.isReleasedWhenClosed = false
             window.center()
             notesWindow = window

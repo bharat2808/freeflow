@@ -177,7 +177,7 @@ final class NotesLibrary: ObservableObject {
 struct NotesView: View {
     @EnvironmentObject var appState: AppState
     @ObservedObject var library: NotesLibrary
-    @State private var search = ""
+    @ObservedObject var searchState: NotesSearchState
     @State private var preview = false
     @State private var showMoveSheet = false
     @State private var destinationFolder = ""
@@ -190,6 +190,11 @@ struct NotesView: View {
     @State private var expandedFolders: Set<String> = []
     @State private var collapsedFolders: Set<String> = []
 
+    init(library: NotesLibrary, searchState: NotesSearchState) {
+        self.library = library
+        self.searchState = searchState
+    }
+
     private var selectedNoteFolder: String? {
         guard let selectedID = library.selectedID else { return nil }
         let folder = library.notes.first(where: { $0.id == selectedID })?.folder ?? ""
@@ -199,6 +204,8 @@ struct NotesView: View {
     private var sidebarFolders: [String] {
         [""] + library.folders.filter { !$0.isEmpty }
     }
+
+    private var search: String { searchState.text }
 
     private func notes(in folder: String) -> [MarkdownNote] {
         library.notes
@@ -366,28 +373,6 @@ struct NotesView: View {
                 }
                 .help(appState.isRecording ? "Stop and save note" : "Start a new voice note")
                 .disabled(appState.isTranscribing)
-            }
-            ToolbarItem(placement: .confirmationAction) {
-                HStack(spacing: 8) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "magnifyingglass")
-                            .foregroundStyle(.secondary)
-                        TextField("Search notes", text: $search)
-                            .textFieldStyle(.plain)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .frame(width: 260)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-                    Menu {
-                        Button { library.revealFiles() } label: { Label("Show files", systemImage: "folder") }
-                        Button { library.reload() } label: { Label("Refresh notes", systemImage: "arrow.clockwise") }
-                        Button { NotificationCenter.default.post(name: .showSettings, object: nil) } label: { Label("Settings", systemImage: "gear") }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .accessibilityLabel("More")
-                    }
-                }
             }
         }
         .confirmationDialog(
