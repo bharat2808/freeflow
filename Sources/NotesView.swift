@@ -518,6 +518,112 @@ struct NotesView: View {
                 .disabled(appState.isTranscribing)
             }
         }
+        .sheet(isPresented: $showCreateFolderSheet) {
+            folderNameSheet(
+                title: "New Folder",
+                prompt: "Folder name",
+                value: $newFolderName,
+                confirmTitle: "Create"
+            ) {
+                library.createFolder(newFolderName)
+                showCreateFolderSheet = false
+            }
+        }
+        .sheet(isPresented: $showRenameSheet) {
+            folderNameSheet(
+                title: "Rename Folder",
+                prompt: "Folder name",
+                value: $renameFolderName,
+                confirmTitle: "Rename"
+            ) {
+                if let selectedFolderForRename {
+                    library.renameFolder(from: selectedFolderForRename, to: renameFolderName)
+                }
+                selectedFolderForRename = nil
+                showRenameSheet = false
+            }
+        }
+        .sheet(isPresented: $showMoveSheet) {
+            moveNoteSheet
+        }
+        .alert("Delete Note?", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                library.deleteSelected()
+            }
+        } message: {
+            Text("This note and its attachments will be permanently deleted.")
+        }
+        .alert("Delete Folder?", isPresented: $showDeleteFolderConfirmation) {
+            Button("Cancel", role: .cancel) {
+                selectedFolderForDelete = nil
+            }
+            Button("Delete", role: .destructive) {
+                if let selectedFolderForDelete {
+                    library.deleteFolder(selectedFolderForDelete)
+                }
+                self.selectedFolderForDelete = nil
+            }
+        } message: {
+            Text("Notes in this folder will be moved to Inbox, then the folder will be deleted.")
+        }
+    }
+
+    private func folderNameSheet(
+        title: String,
+        prompt: String,
+        value: Binding<String>,
+        confirmTitle: String,
+        onConfirm: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(title)
+                .font(.headline)
+            TextField(prompt, text: value)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit(onConfirm)
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) {
+                    if title == "New Folder" {
+                        showCreateFolderSheet = false
+                    } else {
+                        showRenameSheet = false
+                        selectedFolderForRename = nil
+                    }
+                }
+                Button(confirmTitle, action: onConfirm)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(value.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 360)
+    }
+
+    private var moveNoteSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Move Note")
+                .font(.headline)
+            Picker("Folder", selection: $destinationFolder) {
+                ForEach(sidebarFolders, id: \.self) { folder in
+                    Text(folder.isEmpty ? "Inbox" : folder).tag(folder)
+                }
+            }
+            .labelsHidden()
+            .frame(maxWidth: .infinity)
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { showMoveSheet = false }
+                Button("Move") {
+                    library.moveSelected(to: destinationFolder)
+                    showMoveSheet = false
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(24)
+        .frame(width: 360)
     }
 
     private func chooseAttachment(for note: MarkdownNote) {
