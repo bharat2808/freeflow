@@ -251,31 +251,33 @@ struct NotesView: View {
                 Section {
                     ForEach(sidebarFolders, id: \.self) { folder in
                         let folderNotes = notes(in: folder)
-                        Section {
-                            ForEach(dateGroups(for: folderNotes), id: \.0) { dateTitle, dateNotes in
-                                let groupKey = "\(folder)|\(dateTitle)"
-                                let isExpanded = expandedDateGroups.contains(groupKey)
-                                let displayedNotes = isExpanded ? dateNotes : Array(dateNotes.prefix(5))
-                                Section(dateTitle) {
-                                    ForEach(displayedNotes) { note in
-                                        noteRow(note)
-                                    }
-                                    if dateNotes.count > 5 {
-                                        Button(isExpanded ? "Show less" : "Show more") {
-                                            if isExpanded {
-                                                expandedDateGroups.remove(groupKey)
-                                            } else {
-                                                expandedDateGroups.insert(groupKey)
-                                            }
-                                        }
-                                        .buttonStyle(.plain)
-                                        .foregroundStyle(.secondary)
-                                        .padding(.vertical, 4)
+                        folderHeader(folder)
+                        ForEach(dateGroups(for: folderNotes), id: \.0) { dateTitle, dateNotes in
+                            let groupKey = "\(folder)|\(dateTitle)"
+                            let isExpanded = expandedDateGroups.contains(groupKey)
+                            let displayedNotes = isExpanded ? dateNotes : Array(dateNotes.prefix(5))
+                            Text(dateTitle)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.leading, 22)
+                                .padding(.top, 8)
+                            ForEach(displayedNotes) { note in
+                                noteRow(note)
+                                    .padding(.leading, 22)
+                            }
+                            if dateNotes.count > 5 {
+                                Button(isExpanded ? "Show less" : "Show more") {
+                                    if isExpanded {
+                                        expandedDateGroups.remove(groupKey)
+                                    } else {
+                                        expandedDateGroups.insert(groupKey)
                                     }
                                 }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.secondary)
+                                .padding(.leading, 22)
+                                .padding(.vertical, 4)
                             }
-                        } header: {
-                            folderHeader(folder)
                         }
                         .onDrop(of: [UTType.text.identifier], isTargeted: nil) { providers in
                             moveDroppedNote(from: providers, to: folder)
