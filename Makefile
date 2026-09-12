@@ -55,7 +55,7 @@ ICON_SOURCE = Resources/AppIcon-Source.png
 ICON_ICNS = Resources/AppIcon.icns
 endif
 
-.PHONY: all check clean run icon dmg codesign-dmg notarize test typecheck validate markdownui ide-index
+.PHONY: all check clean run icon dmg codesign-dmg notarize test typecheck validate markdownui ide-index connector-build connector-test
 
 all: $(APP_EXECUTABLE_TARGET)
 
@@ -115,6 +115,14 @@ typecheck:
 		$(SOURCES)
 
 markdownui: $(MARKDOWNUI_REQUIRED_ARCHIVES)
+
+connector-build:
+	 swift build --package-path ConnectorPackage -c release
+	 @mkdir -p "$(BUILD_DIR)"
+	 @cp ConnectorPackage/.build/arm64-apple-macosx/release/freeflow-notes-mcp "$(BUILD_DIR)/freeflow-notes-mcp"
+
+connector-test:
+	 swift test --package-path ConnectorPackage
 
 $(BUILD_DIR)/libMarkdownUI-%.a: Package.swift Sources/PackageSupport/PackageSupport.swift
 	@mkdir -p "$(BUILD_DIR)"
