@@ -58,6 +58,7 @@ struct SetupView: View {
     private enum SetupStep: Int, CaseIterable {
         case welcome = 0
         case apiKey
+        case localWhisper
         case micPermission
         case accessibility
         case screenRecording
@@ -81,6 +82,11 @@ struct SetupView: View {
     @State private var transcriptionAPIKeyInput: String = ""
     @State private var isValidatingKey = false
     @State private var keyValidationError: String?
+    @State private var isInstallingLocalWhisper = false
+    @State private var isDownloadingLocalWhisperModel = false
+    @State private var localWhisperDownloadProgress = 0.0
+    @State private var localWhisperSetupMessage: String?
+    @State private var localWhisperSetupError: String?
     @State private var showingProviderSettingsSheet = false
     @State private var accessibilityTimer: Timer?
     @State private var screenRecordingTimer: Timer?
@@ -235,6 +241,8 @@ struct SetupView: View {
             welcomeStep
         case .apiKey:
             apiKeyStep
+        case .localWhisper:
+            localWhisperStep
         case .micPermission:
             micPermissionStep
         case .accessibility:
@@ -514,6 +522,83 @@ struct SetupView: View {
             .cornerRadius(8)
 
         }
+    }
+
+    var localWhisperStep: some View {
+        VStack(spacing: 18) {
+            Image(systemName: "waveform.and.mic")
+                .font(.system(size: 54))
+                .foregroundStyle(.blue)
+            Text("Local Whisper (Optional)")
+                .font(.title)
+                .fontWeight(.bold)
+            Text("Install whisper.cpp and download the local English model to enable on-device transcription. You can skip this and configure it later in Settings.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 10) {
+                setupDependencyRow(
+                    title: "whisper-cli",
+                    detail: LocalWhisperInstaller.installedExecutableURL?.path ?? "Not installed",
+                    ready: LocalWhisperInstaller.installedExecutableURL != nil
+                )
+                setupDependencyRow(
+                    title: "English model",
+                    detail: FileManager.default.fileExists(atPath: LocalWhisperModelDownloader.baseEnglishModelPath.path) ? "Downloaded" : "Not downloaded",
+                    ready: FileManager.default.fileExists(atPath: LocalWhisperModelDownloader.baseEnglishModelPath.path)
+                )
+            }
+
+            HStack(spacing: 10) {
+                Button(isInstallingLocalWhisper ? "Installing…" : "Install whisper.cpp") {
+                    installLocalWhisper()
+                }
+                .disabled(isInstallingLocalWhisper || LocalWhisperInstaller.installedExecutableURL != nil)
+
+                Button(isDownloadingLocalWhisperModel ? "Downloading…" : "Download model") {
+                    downloadLocalWhisperModel()
+                }
+                .disabled(isDownloadingLocalWhisperModel)
+            }
+
+            if isInstallingLocalWhisper {
+                ProgressView()
+                Text(localWhisperSetupMessage ?? "Installing…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if isDownloadingLocalWhisperModel {
+                ProgressView(value: localWhisperDownloadProgress)
+                Text("Downloading (Int(localWhisperDownloadProgress * 100))%")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if let localWhisperSetupMessage {
+                Text(localWhisperSetupMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let localWhisperSetupError {
+                Label(localWhisperSetupError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+            }
+        }
+    }
+
+    private func setupDependencyRow(title: String, detail: String, ready: Bool) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: ready ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(ready ? .green : .secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.subheadline.weight(.semibold))
+                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .cornerRadius(8)
     }
 
     var accessibilityStep: some View {
@@ -1152,6 +1237,54 @@ struct SetupView: View {
                     }
                 } else {
                     keyValidationError = "Validation failed. Please check your API key and provider settings, then try again."
+                }
+            }
+        }
+    }
+
+    private func installLocalWhisper() {
+        guard !isInstallingLocalWhisper else { return }
+        isInstallingLocalWhisper = true
+        localWhisperSetupError = nil
+        Task {
+            do {
+                let executableURL = try await LocalWhisperInstaller.installWhisperCpp { message in
+                    Task { @MainActor in localWhisperSetupMessage = message }
+                }
+                await MainActor.run {
+                    appState.localWhisperExecutablePath = executableURL.path
+                    localWhisperSetupMessage = "Installed at (executableURL.path)"
+                    isInstallingLocalWhisper = false
+                }
+            } catch {
+                await MainActor.run {
+                    localWhisperSetupError = error.localizedDescription
+                    isInstallingLocalWhisper = false
+                }
+            }
+        }
+    }
+
+    private func downloadLocalWhisperModel() {
+        guard !isDownloadingLocalWhisperModel else { return }
+        isDownloadingLocalWhisperModel = true
+        localWhisperDownloadProgress = 0
+        localWhisperSetupError = nil
+        Task {
+            do {
+                let url = try await LocalWhisperModelDownloader.downloadBaseEnglishModel { progress in
+                    Task { @MainActor in localWhisperDownloadProgress = progress }
+                }
+                await MainActor.run {
+                    appState.localWhisperModelPath = url.path
+                    localWhisperDownloadProgress = 1
+                    localWhisperSetupMessage = "Model downloaded"
+                    isDownloadingLocalWhisperModel = false
+                }
+            } catch {
+                await MainActor.run {
+                    localWhisperSetupError = "Could not download the model: (error.localizedDescription)"
+                    isDownloadingLocalWhisperModel = false
                 }
             }
         }

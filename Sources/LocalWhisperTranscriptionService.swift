@@ -57,6 +57,55 @@ enum LocalWhisperModelDownloader {
     }
 }
 
+enum LocalWhisperInstaller {
+    static var brewURL: URL? {
+        ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
+            .map(URL.init(fileURLWithPath:))
+            .first { FileManager.default.isExecutableFile(atPath: $0.path) }
+    }
+
+    static var installedExecutableURL: URL? {
+        ["/opt/homebrew/bin/whisper-cli", "/usr/local/bin/whisper-cli"]
+            .map(URL.init(fileURLWithPath:))
+            .first { FileManager.default.isExecutableFile(atPath: $0.path) }
+    }
+
+    static func installWhisperCpp(
+        progress: @escaping @Sendable (String) -> Void = { _ in }
+    ) async throws -> URL {
+        if let installedExecutableURL { return installedExecutableURL }
+        guard let brewURL else {
+            throw LocalWhisperError.installerNotFound
+        }
+
+        progress("Installing whisper-cpp with Homebrew…")
+        let process = Process()
+        process.executableURL = brewURL
+        process.arguments = ["install", "whisper-cpp"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try process.run()
+
+        let reader = pipe.fileHandleForReading
+        while process.isRunning {
+            if let data = try? reader.read(upToCount: 4096), let output = String(data: data, encoding: .utf8), !output.isEmpty {
+                progress(output.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+            try? await Task.sleep(for: .milliseconds(150))
+        }
+        let remaining = try? reader.readToEnd()
+        if let remaining, let output = String(data: remaining, encoding: .utf8), !output.isEmpty {
+            progress(output.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        guard process.terminationStatus == 0, let executableURL = installedExecutableURL else {
+            throw LocalWhisperError.installFailed
+        }
+        progress("whisper-cpp installed")
+        return executableURL
+    }
+}
+
 private final class ModelDownloadDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     let destinationURL: URL
     let progress: @Sendable (Double) -> Void
@@ -127,6 +176,8 @@ enum LocalWhisperError: LocalizedError {
     case processFailed(Int32, String)
     case timedOut(TimeInterval)
     case emptyTranscript
+    case installerNotFound
+    case installFailed
 
     var errorDescription: String? {
         switch self {
@@ -143,6 +194,10 @@ enum LocalWhisperError: LocalizedError {
             return "Local Whisper timed out after \(Int(seconds)) seconds. Try a smaller model or shorter recording."
         case .emptyTranscript:
             return "Local Whisper returned no transcript."
+        case .installerNotFound:
+            return "Homebrew was not found. Install Homebrew first, or set a custom whisper-cli path in Settings."
+        case .installFailed:
+            return "Homebrew could not install whisper-cpp. Install it manually, then choose whisper-cli in Settings."
         }
     }
 }
