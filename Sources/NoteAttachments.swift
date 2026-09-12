@@ -216,10 +216,11 @@ private struct TextAttachmentView: View {
                         .textSelection(.enabled)
                         .fixedSize(horizontal: true, vertical: false)
                         .padding(12)
+                        .contentShape(Rectangle())
+                        .onTapGesture { isFocused.toggle() }
                 }
                 .frame(maxWidth: .infinity, minHeight: 420, maxHeight: 800)
                 .scrollDisabled(!isFocused)
-                .onTapGesture { isFocused.toggle() }
                 .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
                 .overlay {
                     RoundedRectangle(cornerRadius: 8)
