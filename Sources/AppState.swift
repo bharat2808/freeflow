@@ -5,20 +5,8 @@ import AVFoundation
 import ServiceManagement
 import ApplicationServices
 import ScreenCaptureKit
-import Carbon
 import os.log
 private let recordingLog = OSLog(subsystem: "com.zachlatta.freeflow", category: "Recording")
-
-struct VoiceMacro: Codable, Identifiable, Equatable {
-    var id: UUID = UUID()
-    var command: String
-    var payload: String
-}
-
-struct PrecomputedMacro {
-    let original: VoiceMacro
-    let normalizedCommand: String
-}
 
 enum SettingsTab: String, CaseIterable, Identifiable {
     case general
@@ -60,76 +48,6 @@ enum AppBuild {
     static var isDevBundle: Bool {
         (Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String) == "FreeFlow Dev"
     }
-}
-
-private struct PreservedPasteboardEntry {
-    let type: NSPasteboard.PasteboardType
-    let value: Value
-
-    enum Value {
-        case string(String)
-        case propertyList(Any)
-        case data(Data)
-    }
-}
-
-private struct PreservedPasteboardItem {
-    let entries: [PreservedPasteboardEntry]
-
-    init(item: NSPasteboardItem) {
-        self.entries = item.types.compactMap { type in
-            if let string = item.string(forType: type) {
-                return PreservedPasteboardEntry(type: type, value: .string(string))
-            }
-            if let propertyList = item.propertyList(forType: type) {
-                return PreservedPasteboardEntry(type: type, value: .propertyList(propertyList))
-            }
-            if let data = item.data(forType: type) {
-                return PreservedPasteboardEntry(type: type, value: .data(data))
-            }
-            return nil
-        }
-    }
-
-    func makePasteboardItem() -> NSPasteboardItem {
-        let item = NSPasteboardItem()
-        for entry in entries {
-            switch entry.value {
-            case .string(let string):
-                item.setString(string, forType: entry.type)
-            case .propertyList(let propertyList):
-                item.setPropertyList(propertyList, forType: entry.type)
-            case .data(let data):
-                item.setData(data, forType: entry.type)
-            }
-        }
-        return item
-    }
-}
-
-private struct PreservedPasteboardSnapshot {
-    let items: [PreservedPasteboardItem]
-
-    init(pasteboard: NSPasteboard) {
-        self.items = (pasteboard.pasteboardItems ?? []).map(PreservedPasteboardItem.init)
-    }
-
-    func restore(to pasteboard: NSPasteboard) {
-        pasteboard.clearContents()
-        guard !items.isEmpty else { return }
-        _ = pasteboard.writeObjects(items.map { $0.makePasteboardItem() })
-    }
-}
-
-private struct PendingClipboardRestore {
-    let snapshot: PreservedPasteboardSnapshot
-    let expectedChangeCount: Int
-    let writtenTranscript: String
-}
-
-private struct TranscriptCommandParsingResult {
-    let transcript: String
-    let shouldPressEnterAfterPaste: Bool
 }
 
 fileprivate struct NoteFormattingResult: Sendable {
@@ -263,9 +181,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private let realtimeStreamingEnabledStorageKey = "realtime_streaming_enabled"
     private let realtimeStreamingModelStorageKey = "realtime_streaming_model"
     private let dictationAudioInterruptionEnabledStorageKey = "dictation_audio_interruption_enabled"
-    private let pasteAfterShortcutReleaseDelay: TimeInterval = 0.03
-    private let pressEnterAfterPasteDelay: TimeInterval = 0.08
-    private let clipboardRestoreDelay: TimeInterval = 1.0
     let maxPipelineHistoryCount = 20
     static let defaultContextScreenshotMaxDimension = Int(AppContextService.defaultScreenshotMaxDimension)
     static let contextScreenshotDimensionOptions = [1024, 768, 640, 512]
@@ -319,10 +234,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
     }
     private static let deprecatedDefaultPostProcessingFallbackModel = "meta-llama/llama-4-scout-17b-16e-instruct"
     private static let deprecatedDefaultContextModel = "meta-llama/llama-4-scout-17b-16e-instruct"
-    private static let trailingPressEnterCommandPattern = try! NSRegularExpression(
-        pattern: #"(?i)(?:^|[ \t\r\n,;:\-]+)press[ \t\r\n]+enter[\s\p{P}]*$"#
-    )
-
     @Published var hasCompletedSetup: Bool {
         didSet {
             UserDefaults.standard.set(hasCompletedSetup, forKey: "hasCompletedSetup")
@@ -600,14 +511,14 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private var precomputedMacros: [PrecomputedMacro] = []
+    private let macroMatcher = VoiceMacroMatcher()
 
     @Published var voiceMacros: [VoiceMacro] = [] {
         didSet {
             if let data = try? JSONEncoder().encode(voiceMacros) {
                 UserDefaults.standard.set(data, forKey: voiceMacrosStorageKey)
             }
-            precomputeMacros()
+            macroMatcher.update(voiceMacros)
         }
     }
 
@@ -660,6 +571,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     let audioRecorder = AudioRecorder()
     let hotkeyManager = HotkeyManager()
     let overlayManager = RecordingOverlayManager()
+    private let clipboardController = ClipboardController()
     private var accessibilityTimer: Timer?
     private var audioLevelCancellable: AnyCancellable?
     private var debugOverlayTimer: Timer?
@@ -861,8 +773,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.hasScreenRecordingPermission = initialScreenCapturePermission
         self.launchAtLogin = SMAppService.mainApp.status == .enabled
         self.selectedMicrophoneID = selectedMicrophoneID
-        self.precomputeMacros()
-
+        self.macroMatcher.update(initialMacros)
         refreshAvailableMicrophones()
         installAudioDeviceObservers()
 
@@ -1163,13 +1074,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     }
 
     static func audioStorageDirectory() -> URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let appName = AppName.displayName
-        let audioDir = appSupport.appendingPathComponent("\(appName)/audio", isDirectory: true)
-        if !FileManager.default.fileExists(atPath: audioDir.path) {
-            try? FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
-        }
-        return audioDir
+        RecordingArtifactStore.shared.audioDirectory
     }
 
     /// URL of the flag file written while FreeFlow is actively recording.
@@ -1183,16 +1088,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
     /// Path: `~/Library/Application Support/FreeFlow/is-recording`
     /// (or `FreeFlow Dev/is-recording` when running the dev bundle).
     static func recordingStateFlagURL() -> URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "FreeFlow"
-        return appSupport.appendingPathComponent("\(appName)/is-recording")
+        RecordingArtifactStore.shared.recordingStateFlagURL
     }
-
-    /// Serial queue that owns every flag-file I/O so the recording
-    /// start/stop hot path never blocks on disk.
-    private static let recordingStateFlagQueue = DispatchQueue(
-        label: "com.zachlatta.freeflow.recording-state-flag"
-    )
 
     /// Write or clear the `is-recording` flag file. Called from the
     /// `isRecording` didSet. Dispatches to a background queue so disk
@@ -1200,42 +1097,18 @@ final class AppState: ObservableObject, @unchecked Sendable {
     /// swallowed — this is advisory IPC and must never interrupt the
     /// recording pipeline.
     static func writeRecordingStateFlag(_ recording: Bool) {
-        let timestamp = recording ? String(Date().timeIntervalSince1970) : nil
-        recordingStateFlagQueue.async {
-            let url = recordingStateFlagURL()
-            if let timestamp {
-                let dir = url.deletingLastPathComponent()
-                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                try? timestamp.write(to: url, atomically: true, encoding: .utf8)
-            } else {
-                try? FileManager.default.removeItem(at: url)
-            }
-        }
+        RecordingArtifactStore.shared.writeRecordingStateFlag(recording)
     }
 
     static func saveAudioFile(from tempURL: URL) -> SavedAudioFile? {
-        let fileName = UUID().uuidString + ".wav"
-        let destURL = audioStorageDirectory().appendingPathComponent(fileName)
-        do {
-            try FileManager.default.copyItem(at: tempURL, to: destURL)
-            return SavedAudioFile(fileName: fileName, fileURL: destURL)
-        } catch {
-            os_log(
-                .error,
-                log: recordingLog,
-                "failed to persist audio file %{public}@ from %{public}@ to %{public}@ : %{public}@",
-                fileName,
-                tempURL.path,
-                destURL.path,
-                error.localizedDescription
-            )
+        guard let savedFile = RecordingArtifactStore.shared.saveAudioFile(from: tempURL) else {
             return nil
         }
+        return SavedAudioFile(fileName: savedFile.fileName, fileURL: savedFile.fileURL)
     }
 
     private static func deleteAudioFile(_ fileName: String) {
-        let fileURL = audioStorageDirectory().appendingPathComponent(fileName)
-        try? FileManager.default.removeItem(at: fileURL)
+        RecordingArtifactStore.shared.deleteAudioFile(named: fileName)
     }
 
     func clearPipelineHistory() {
@@ -1302,7 +1175,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
             do {
                 let transcriptionService = try makeTranscriptionService()
                 let rawTranscript = try await transcriptionService.transcribe(fileURL: audioURL)
-                let parsedTranscript = Self.parseTranscriptCommands(
+                let parsedTranscript = TranscriptCommandParser.parse(
                     from: rawTranscript,
                     pressEnterCommandEnabled: self.isPressEnterVoiceCommandEnabled
                 )
@@ -1362,8 +1235,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                         let trimmedRetryTranscript = finalTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !trimmedRetryTranscript.isEmpty {
                             lastTranscript = trimmedRetryTranscript
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(trimmedRetryTranscript, forType: .string)
+                            clipboardController.copy(trimmedRetryTranscript)
                         }
                     } catch {
                         errorMessage = "Failed to save retry result: \(error.localizedDescription)"
@@ -2570,52 +2442,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
         showAccessibilityAlert()
     }
 
-    private func precomputeMacros() {
-        precomputedMacros = voiceMacros.map { macro in
-            PrecomputedMacro(
-                original: macro,
-                normalizedCommand: normalize(macro.command)
-            )
-        }
-    }
-
-    private func normalize(_ text: String) -> String {
-        let lowercased = text.lowercased()
-        let strippedPunctuation = lowercased.components(separatedBy: CharacterSet.punctuationCharacters).joined()
-        return strippedPunctuation.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private static func parseTranscriptCommands(
-        from transcript: String,
-        pressEnterCommandEnabled: Bool
-    ) -> TranscriptCommandParsingResult {
-        guard pressEnterCommandEnabled else {
-            return TranscriptCommandParsingResult(
-                transcript: transcript.trimmingCharacters(in: .whitespacesAndNewlines),
-                shouldPressEnterAfterPaste: false
-            )
-        }
-
-        let fullRange = NSRange(transcript.startIndex..<transcript.endIndex, in: transcript)
-        guard
-            let match = trailingPressEnterCommandPattern.firstMatch(in: transcript, range: fullRange),
-            let commandRange = Range(match.range, in: transcript)
-        else {
-            return TranscriptCommandParsingResult(
-                transcript: transcript.trimmingCharacters(in: .whitespacesAndNewlines),
-                shouldPressEnterAfterPaste: false
-            )
-        }
-
-        var strippedTranscript = transcript
-        strippedTranscript.removeSubrange(commandRange)
-
-        return TranscriptCommandParsingResult(
-            transcript: strippedTranscript.trimmingCharacters(in: .whitespacesAndNewlines),
-            shouldPressEnterAfterPaste: true
-        )
-    }
-
     private static func statusMessage(
         for outcome: TranscriptProcessingOutcome,
         parsedTranscript: TranscriptCommandParsingResult,
@@ -2635,12 +2461,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     }
 
     private func findMatchingMacro(for transcript: String) -> VoiceMacro? {
-        let normalizedTranscript = normalize(transcript)
-        guard !normalizedTranscript.isEmpty else { return nil }
-
-        return precomputedMacros.first {
-            normalizedTranscript == $0.normalizedCommand
-        }?.original
+        macroMatcher.match(transcript: transcript)
     }
 
     fileprivate enum TranscriptProcessingOutcome: Sendable {
@@ -3249,7 +3070,7 @@ exactly unless the spoken instruction explicitly asks to remove or convert that 
                         )
                     }
                     let transcriptionElapsed = CFAbsoluteTimeGetCurrent() - transcriptionStartedAt
-                    let parsedTranscript = Self.parseTranscriptCommands(
+                    let parsedTranscript = TranscriptCommandParser.parse(
                         from: rawTranscript,
                         pressEnterCommandEnabled: !shouldSaveAsNote && noteUpdateTarget == nil
                             ? self.isPressEnterVoiceCommandEnabled
@@ -3877,171 +3698,29 @@ exactly unless the spoken instruction explicitly asks to remove or convert that 
         NotificationCenter.default.post(name: .showSettings, object: nil)
     }
 
-    private func pasteAtCursor() {
-        let source = CGEventSource(stateID: .hidSystemState)
-        let vKeyCode = keyCodeForCharacter("v") ?? 9
-
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: true)
-        keyDown?.flags = .maskCommand
-        keyDown?.post(tap: .cgSessionEventTap)
-
-        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: false)
-        keyUp?.flags = .maskCommand
-        keyUp?.post(tap: .cgSessionEventTap)
-    }
-
-    private func keyCodeForCharacter(_ character: String) -> CGKeyCode? {
-        guard let char = character.lowercased().utf16.first else { return nil }
-        let source = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
-        guard let layoutDataRef = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else {
-            return nil
-        }
-        let layoutData = unsafeBitCast(layoutDataRef, to: CFData.self) as Data
-        return layoutData.withUnsafeBytes { (ptr: UnsafeRawBufferPointer) -> CGKeyCode? in
-            guard let layout = ptr.baseAddress?.assumingMemoryBound(to: UCKeyboardLayout.self) else {
-                return nil
-            }
-            for keyCode in UInt16(0)..<UInt16(128) {
-                var chars = [UniChar](repeating: 0, count: 4)
-                var charCount = 0
-                var deadKeyState: UInt32 = 0
-                let status = UCKeyTranslate(
-                    layout, keyCode, UInt16(kUCKeyActionDisplay), 0,
-                    UInt32(LMGetKbdType()), OptionBits(kUCKeyTranslateNoDeadKeysBit),
-                    &deadKeyState, 4, &charCount, &chars
-                )
-                if status == noErr, charCount > 0, chars[0] == char {
-                    return CGKeyCode(keyCode)
-                }
-            }
-            return nil
-        }
-    }
-
-    private func pressEnter() {
-        let source = CGEventSource(stateID: .hidSystemState)
-
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 36, keyDown: true)
-        keyDown?.post(tap: .cgSessionEventTap)
-
-        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 36, keyDown: false)
-        keyUp?.post(tap: .cgSessionEventTap)
-    }
-
-    /// Writes the final transcript to the system pasteboard.
-    /// Also handles appending necessary trailing spaces, declaring transient
-    /// types for clipboard managers, and saving the clipboard state for later restoration.
-    /// - Parameter transcript: The text to be pasted.
-    /// - Returns: A `PendingClipboardRestore` object if clipboard preservation is enabled, otherwise nil.
     private func writeTranscriptToPasteboard(_ transcript: String) -> PendingClipboardRestore? {
-        let pasteboard = NSPasteboard.general
-        let snapshot = preserveClipboard ? PreservedPasteboardSnapshot(pasteboard: pasteboard) : nil
-
-        // Append a space when ending with sentence-ending punctuation so the
-        // next dictation does not jam against the prior period.
-        let textToWrite: String
-        if let last = transcript.last, ".!?".contains(last) {
-            textToWrite = transcript + " "
-        } else {
-            textToWrite = transcript
-        }
-
-        if keepDictationInClipboardHistory {
-            // Plain write so clipboard managers record the dictation in history.
-            pasteboard.clearContents()
-            pasteboard.setString(textToWrite, forType: .string)
-        } else {
-            // Declare standard transient types alongside .string so well-behaved
-            // clipboard managers (Maccy, Raycast, Paste, Clipy, Flycut, etc.) skip
-            // recording this entry in their history. The text still pastes normally
-            // via Cmd-V — only clipboard history is affected.
-            //
-            // See: https://github.com/nicke5012/TransientPasteboardType
-            let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
-            let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
-            let autoGeneratedType = NSPasteboard.PasteboardType("org.nspasteboard.AutoGeneratedType")
-            let legacyTransientType = NSPasteboard.PasteboardType("de.petermaurer.TransientPasteboardType")
-
-            pasteboard.declareTypes([
-                .string,
-                transientType,
-                concealedType,
-                autoGeneratedType,
-                legacyTransientType
-            ], owner: nil)
-
-            pasteboard.setString(textToWrite, forType: .string)
-
-            // Populate empty values for the marker types — some clipboard managers
-            // check the data presence rather than just the declared type.
-            pasteboard.setString("", forType: transientType)
-            pasteboard.setString("", forType: concealedType)
-            pasteboard.setString("", forType: autoGeneratedType)
-            pasteboard.setString("", forType: legacyTransientType)
-        }
-
-        guard let snapshot else { return nil }
-        return PendingClipboardRestore(
-            snapshot: snapshot,
-            expectedChangeCount: pasteboard.changeCount,
-            writtenTranscript: textToWrite
+        clipboardController.writeTranscript(
+            transcript,
+            preserveClipboard: preserveClipboard,
+            keepInClipboardHistory: keepDictationInClipboardHistory
         )
     }
 
     private func restoreClipboardIfNeeded(_ pendingRestore: PendingClipboardRestore?) {
-        guard let pendingRestore else { return }
-
-        // Some apps consume Cmd-V asynchronously, so restoring too quickly can paste
-        // the pre-dictation clipboard instead of the transcript.
-        DispatchQueue.main.asyncAfter(deadline: .now() + clipboardRestoreDelay) {
-            let pasteboard = NSPasteboard.general
-            // A bare changeCount check is too strict: browsers, iCloud Universal
-            // Clipboard sync, and other background apps bump the change count
-            // without the user copying anything, which left the transcript
-            // stranded on the clipboard. Restore when nothing changed, or when the
-            // clipboard still holds exactly the transcript we wrote (so the user
-            // has not deliberately copied something new that we would clobber).
-            let clipboardStillHoldsTranscript =
-                pasteboard.string(forType: .string) == pendingRestore.writtenTranscript
-            guard pasteboard.changeCount == pendingRestore.expectedChangeCount
-                || clipboardStillHoldsTranscript else { return }
-            pendingRestore.snapshot.restore(to: pasteboard)
-        }
-    }
-
-    private func performAfterShortcutReleased(attempt: Int = 0, action: @escaping () -> Void) {
-        let maxAttempts = 24
-        if hotkeyManager.hasPressedShortcutInputs && attempt < maxAttempts {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.025) { [weak self] in
-                self?.performAfterShortcutReleased(attempt: attempt + 1, action: action)
-            }
-            return
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + pasteAfterShortcutReleaseDelay) {
-            action()
-        }
+        clipboardController.restoreIfNeeded(pendingRestore)
     }
 
     private func pasteAtCursorWhenShortcutReleased(completion: (() -> Void)? = nil) {
-        performAfterShortcutReleased { [weak self] in
-            self?.pasteAtCursor()
-            completion?()
-        }
-    }
-
-    private func pressEnterWhenShortcutReleased(completion: (() -> Void)? = nil) {
-        performAfterShortcutReleased { [weak self] in
-            self?.pressEnter()
-            completion?()
-        }
+        clipboardController.pasteWhenShortcutReleased(
+            isShortcutPressed: { [weak self] in
+                self?.hotkeyManager.hasPressedShortcutInputs ?? false
+            },
+            completion: completion
+        )
     }
 
     private func pressEnterAfterPaste(completion: (() -> Void)? = nil) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + pressEnterAfterPasteDelay) { [weak self] in
-            self?.pressEnter()
-            completion?()
-        }
+        clipboardController.pressEnterAfterPaste(completion: completion)
     }
 
     private func cancelRecordingInitializationTimer() {

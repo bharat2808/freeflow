@@ -10,6 +10,8 @@ enum TranscriptTextCoreTests {
         testPostProcessedTranscriptSanitization()
         testModeSpecificSanitization()
         testInstructionExecutionGuard()
+        testTrailingPressEnterCommandParsing()
+        testTranscriptPasteFormatting()
     }
 
     private static func testJSONTranscriptParsing() {
@@ -145,6 +147,62 @@ enum TranscriptTextCoreTests {
             ),
             "Explicit translation output should bypass the instruction guard"
         )
+    }
+
+    private static func testTrailingPressEnterCommandParsing() {
+        TestSupport.expectEqual(
+            TranscriptCommandParser.parse(
+                from: "Send the synthetic update, press enter.",
+                pressEnterCommandEnabled: true
+            ),
+            TranscriptCommandParsingResult(
+                transcript: "Send the synthetic update",
+                shouldPressEnterAfterPaste: true
+            )
+        )
+        TestSupport.expectEqual(
+            TranscriptCommandParser.parse(
+                from: "Press enter",
+                pressEnterCommandEnabled: true
+            ),
+            TranscriptCommandParsingResult(transcript: "", shouldPressEnterAfterPaste: true)
+        )
+        TestSupport.expectEqual(
+            TranscriptCommandParser.parse(
+                from: "Press enter to continue",
+                pressEnterCommandEnabled: true
+            ),
+            TranscriptCommandParsingResult(
+                transcript: "Press enter to continue",
+                shouldPressEnterAfterPaste: false
+            )
+        )
+        TestSupport.expectEqual(
+            TranscriptCommandParser.parse(
+                from: "  Keep press enter  ",
+                pressEnterCommandEnabled: false
+            ),
+            TranscriptCommandParsingResult(
+                transcript: "Keep press enter",
+                shouldPressEnterAfterPaste: false
+            )
+        )
+    }
+
+    private static func testTranscriptPasteFormatting() {
+        TestSupport.expectEqual(
+            TranscriptPasteTextFormatter.textToWrite(for: "Synthetic sentence."),
+            "Synthetic sentence. "
+        )
+        TestSupport.expectEqual(
+            TranscriptPasteTextFormatter.textToWrite(for: "Synthetic question?"),
+            "Synthetic question? "
+        )
+        TestSupport.expectEqual(
+            TranscriptPasteTextFormatter.textToWrite(for: "Synthetic fragment"),
+            "Synthetic fragment"
+        )
+        TestSupport.expectEqual(TranscriptPasteTextFormatter.textToWrite(for: ""), "")
     }
 
     private static func jsonData(_ object: [String: Any]) -> Data {

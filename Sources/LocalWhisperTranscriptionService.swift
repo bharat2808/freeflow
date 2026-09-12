@@ -369,7 +369,6 @@ final class LocalWhisperTranscriptionService: AudioTranscriber {
             try Task.checkCancellation()
             try await Task.sleep(nanoseconds: 100_000_000)
         }
-        process.waitUntilExit()
 
         let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         guard process.terminationStatus == 0 else {

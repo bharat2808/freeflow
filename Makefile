@@ -19,12 +19,15 @@ TEST_PRODUCTION_SOURCES = \
 	Sources/TranscriptionService.swift \
 	Sources/AppContextService.swift \
 	Sources/AppName.swift \
+	Sources/ClipboardController.swift \
 	Sources/LLMAPITransport.swift \
 	Sources/LLMCooldownManager.swift \
 	Sources/ModelConfiguration.swift \
+	Sources/RecordingArtifactStore.swift \
 	Sources/TranscriptionErrorPresentationCore.swift \
 	Sources/TranscriptTextCore.swift \
 	Sources/UpdateManager.swift \
+	Sources/VoiceMacroMatcher.swift \
 	Sources/ShortcutCore/DictationShortcutSessionController.swift \
 	Sources/ShortcutCore/ShortcutMatcher.swift \
 	Sources/ShortcutCore/ShortcutModels.swift
