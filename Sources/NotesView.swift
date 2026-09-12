@@ -656,13 +656,14 @@ struct NotesView: View {
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.title3.weight(.bold))
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(Color(nsColor: .labelColor))
                         .frame(width: 28, height: 28)
                 }
                 .buttonStyle(.borderless)
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
-                .foregroundStyle(.primary)
+                .tint(Color(nsColor: .labelColor))
+                .foregroundStyle(Color(nsColor: .labelColor))
                 .help("Folder actions")
             }
         }
