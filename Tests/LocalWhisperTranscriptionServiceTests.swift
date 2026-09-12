@@ -1,6 +1,33 @@
 import Foundation
 
 enum LocalWhisperTranscriptionServiceTests {
+    private final class PreviewTestState: @unchecked Sendable {
+        private let lock = NSLock()
+        private var transcriptionCount = 0
+        private var updates = [String]()
+
+        func nextTranscript() -> String {
+            lock.withLock {
+                transcriptionCount += 1
+                return "chunk \(transcriptionCount)"
+            }
+        }
+
+        func record(_ transcript: String) {
+            lock.withLock {
+                updates.append(transcript)
+            }
+        }
+
+        var updateCount: Int {
+            lock.withLock { updates.count }
+        }
+
+        var recordedUpdates: [String] {
+            lock.withLock { updates }
+        }
+    }
+
     static func run() {
         let semaphore = DispatchSemaphore(value: 0)
         var failure: Error?
@@ -35,6 +62,8 @@ enum LocalWhisperTranscriptionServiceTests {
                 let previewTranscript = try await service.transcribePCM16(pcm, sampleRate: 24_000)
                 TestSupport.expectEqual(previewTranscript, "hello from local whisper")
 
+                try await verifyPreviewContinuesAcrossChunks()
+
             } catch {
                 failure = error
             }
@@ -43,5 +72,30 @@ enum LocalWhisperTranscriptionServiceTests {
 
         semaphore.wait()
         if let failure { fatalError("Local Whisper test failed: \(failure)") }
+    }
+
+    private static func verifyPreviewContinuesAcrossChunks() async throws {
+        let state = PreviewTestState()
+        let session = LocalWhisperPreviewSession(
+            transcribe: { _, sampleRate in
+                TestSupport.expectEqual(sampleRate, 16_000)
+                return state.nextTranscript()
+            },
+            onUpdate: { transcript in
+                state.record(transcript)
+            }
+        )
+
+        var sample: Int16 = 8_000
+        let chunk = Data(bytes: &sample, count: MemoryLayout<Int16>.size)
+        let threeSeconds = Data(repeating: chunk[0], count: 16_000 * 3 * MemoryLayout<Int16>.size)
+        session.appendPCM16(threeSeconds)
+        session.appendPCM16(threeSeconds)
+
+        for _ in 0..<200 where state.updateCount < 2 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        session.stop()
+        TestSupport.expectEqual(state.recordedUpdates, ["chunk 1", "chunk 1 chunk 2"])
     }
 }

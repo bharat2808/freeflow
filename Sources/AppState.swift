@@ -3197,6 +3197,7 @@ Separate newly appended attachments and text from the existing note with blank l
             let activeLocalPreview = self.localPreviewService
             self.localPreviewService = nil
             self.audioRecorder.onPCM16Samples = nil
+            self.audioRecorder.onRecordingPCM16Samples = nil
             self.transcriptionTask?.cancel()
             guard self.isTranscribing else {
                 if let savedAudioFile {
@@ -3553,7 +3554,7 @@ Separate newly appended attachments and text from the existing note with blank l
                     }
                 }
                 localPreviewService = preview
-                audioRecorder.onPCM16Samples = { [weak preview] data in
+                audioRecorder.onRecordingPCM16Samples = { [weak preview] data in
                     preview?.appendPCM16(data)
                 }
             } catch {
@@ -3594,6 +3595,7 @@ Separate newly appended attachments and text from the existing note with blank l
 
     private func tearDownRealtimeService() {
         audioRecorder.onPCM16Samples = nil
+        audioRecorder.onRecordingPCM16Samples = nil
         realtimeService?.cancel()
         realtimeService = nil
         localPreviewService?.stop()
