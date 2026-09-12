@@ -257,25 +257,13 @@ struct NotesView: View {
                     HStack {
                         Text("Notes")
                         Spacer()
-                        HStack(spacing: 5) {
-                            Image(systemName: "magnifyingglass")
-                                .foregroundStyle(.secondary)
-                            TextField("Search", text: $search)
-                                .textFieldStyle(.plain)
+                        Button { library.create("# Untitled note\n\n") } label: {
+                            Image(systemName: "note.text.badge.plus")
+                                .font(.title3)
+                                .frame(width: 34, height: 34)
                         }
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 4)
-                        .frame(width: 118)
-                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
-                        Menu {
-                            Button { library.revealFiles() } label: { Label("Show files", systemImage: "folder") }
-                            Button { library.reload() } label: { Label("Refresh notes", systemImage: "arrow.clockwise") }
-                            Button { NotificationCenter.default.post(name: .showSettings, object: nil) } label: { Label("Settings", systemImage: "gear") }
-                        } label: {
-                            Image(systemName: "ellipsis.circle")
-                        }
-                        .accessibilityLabel("More")
                         .buttonStyle(.borderless)
+                        .help("New note")
                         Button {
                             newFolderName = ""
                             showCreateFolderSheet = true
@@ -378,6 +366,28 @@ struct NotesView: View {
                 }
                 .help(appState.isRecording ? "Stop and save note" : "Start a new voice note")
                 .disabled(appState.isTranscribing)
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                HStack(spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(.secondary)
+                        TextField("Search notes", text: $search)
+                            .textFieldStyle(.plain)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .frame(width: 260)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                    Menu {
+                        Button { library.revealFiles() } label: { Label("Show files", systemImage: "folder") }
+                        Button { library.reload() } label: { Label("Refresh notes", systemImage: "arrow.clockwise") }
+                        Button { NotificationCenter.default.post(name: .showSettings, object: nil) } label: { Label("Settings", systemImage: "gear") }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .accessibilityLabel("More")
+                    }
+                }
             }
         }
         .confirmationDialog(
