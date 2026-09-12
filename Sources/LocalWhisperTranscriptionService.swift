@@ -373,19 +373,14 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
     private let onUpdate: @Sendable (String) -> Void
     private let stateLock = OSAllocatedUnfairLock(initialState: ())
     private var audio = Data()
-    private var totalBytesReceived = 0
-    private var lastSubmittedTotalBytes = 0
+    private var committedTranscript = ""
     private var processing = false
-    private var pending = false
     private var stopped = false
     private var workerTask: Task<Void, Never>?
 
     private let sampleRate = 24_000
-    // Preview inference must stay close to real time.  The final note is
-    // transcribed separately after recording stops, so preview can use a
-    // short rolling window instead of repeatedly replaying 45 seconds.
-    private let processEveryFrames = 24_000 * 2
-    private let maxPreviewFrames = 24_000 * 12
+    private let chunkFrames = 24_000 * 5
+    private let maxBufferedFrames = 24_000 * 20
 
     init(
         transcriber: LocalWhisperTranscriptionService,
@@ -400,23 +395,12 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
         let snapshot: Data? = stateLock.withLock {
             guard !stopped else { return nil }
             audio.append(samples)
-            totalBytesReceived += samples.count
             let bytesPerFrame = MemoryLayout<Int16>.size
-            let maxBytes = maxPreviewFrames * bytesPerFrame
+            let maxBytes = maxBufferedFrames * bytesPerFrame
             if audio.count > maxBytes {
                 audio.removeFirst(audio.count - maxBytes)
             }
-            let minimumBytes = processEveryFrames * bytesPerFrame
-            let hasNewAudio = totalBytesReceived - lastSubmittedTotalBytes >= minimumBytes
-            let shouldProcess = audio.count >= minimumBytes && hasNewAudio
-                && !processing
-            if shouldProcess {
-                processing = true
-                lastSubmittedTotalBytes = totalBytesReceived
-                return audio
-            }
-            if processing && hasNewAudio { pending = true }
-            return nil
+            return nextChunkIfReadyLocked()
         }
 
         guard let snapshot else { return }
@@ -428,10 +412,19 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
     func stop() {
         stateLock.withLock {
             stopped = true
-            pending = false
             workerTask?.cancel()
             workerTask = nil
         }
+    }
+
+    private func nextChunkIfReadyLocked() -> Data? {
+        guard !processing else { return nil }
+        let chunkBytes = chunkFrames * MemoryLayout<Int16>.size
+        guard audio.count >= chunkBytes else { return nil }
+        processing = true
+        let chunk = Data(audio.prefix(chunkBytes))
+        audio.removeFirst(chunkBytes)
+        return chunk
     }
 
     private func process(_ snapshot: Data) async {
@@ -439,7 +432,15 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
             let transcript = try await transcriber.transcribePCM16(snapshot, sampleRate: sampleRate)
             try Task.checkCancellation()
             if !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                onUpdate(transcript)
+                let committed: String = stateLock.withLock {
+                    if committedTranscript.isEmpty {
+                        committedTranscript = transcript
+                    } else {
+                        committedTranscript += " " + transcript
+                    }
+                    return committedTranscript
+                }
+                onUpdate(committed)
             }
         } catch is CancellationError {
             // Recording cancellation is expected and should not surface as an error.
@@ -453,16 +454,11 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
                 processing = false
                 return nil
             }
-            let minimumBytes = processEveryFrames * MemoryLayout<Int16>.size
-            if pending,
-               audio.count >= minimumBytes,
-               totalBytesReceived - lastSubmittedTotalBytes >= minimumBytes {
-                pending = false
-                lastSubmittedTotalBytes = totalBytesReceived
-                return audio
+            let next = nextChunkIfReadyLocked()
+            if next == nil {
+                processing = false
             }
-            processing = false
-            return nil
+            return next
         }
 
         if let nextSnapshot {
