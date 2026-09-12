@@ -273,22 +273,30 @@ struct NotesView: View {
                 }
                 Section("Notes") {
                     ForEach(visibleNotes) { note in
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(note.title).font(.headline).lineLimit(2)
-                            HStack(spacing: 6) {
-                                if folderFilter == "__all__", !note.folder.isEmpty {
-                                    Label(note.folder, systemImage: "folder")
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(note.title).font(.headline).lineLimit(2)
+                                HStack(spacing: 6) {
+                                    if folderFilter == "__all__", !note.folder.isEmpty {
+                                        Label(note.folder, systemImage: "folder")
+                                    }
+                                    Text(note.modified, style: .date)
                                 }
-                                Text(note.modified, style: .date)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                             }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            Spacer(minLength: 4)
+                            Image(systemName: "line.3.horizontal")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .padding(.vertical, 8)
+                                .contentShape(Rectangle())
+                                .onDrag {
+                                    NSItemProvider(object: note.id.uuidString as NSString)
+                                }
                         }
                         .padding(.vertical, 5)
                         .tag(note.id)
-                        .onDrag {
-                            NSItemProvider(object: note.id.uuidString as NSString)
-                        }
                         .contextMenu {
                             Button {
                                 library.selectedID = note.id
