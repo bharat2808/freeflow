@@ -210,17 +210,8 @@ private struct TextAttachmentView: View {
         VStack(alignment: .leading, spacing: 6) {
             AttachmentHeader(label: label, icon: "doc.text", url: url)
             if let contents = try? String(contentsOf: url, encoding: .utf8) {
-                ScrollView([.horizontal, .vertical]) {
-                    Text(contents)
-                        .font(.system(.body, design: .monospaced))
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .padding(12)
-                        .contentShape(Rectangle())
-                        .onTapGesture { isFocused.toggle() }
-                }
+                FocusToggleTextScrollView(contents: contents, isFocused: $isFocused)
                 .frame(maxWidth: .infinity, minHeight: 420, maxHeight: 800)
-                .scrollDisabled(!isFocused)
                 .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
                 .overlay {
                     RoundedRectangle(cornerRadius: 8)
@@ -231,6 +222,88 @@ private struct TextAttachmentView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+private struct FocusToggleTextScrollView: NSViewRepresentable {
+    let contents: String
+    @Binding var isFocused: Bool
+
+    func makeNSView(context: Context) -> FocusGatedScrollView {
+        let scrollView = FocusGatedScrollView()
+        let textView = FocusToggleTextView()
+
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasHorizontalScroller = true
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.isDocumentFocused = isFocused
+
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.drawsBackground = false
+        textView.font = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        textView.string = contents
+        textView.textContainerInset = NSSize(width: 12, height: 12)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = true
+        textView.minSize = .zero
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.textContainer?.containerSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.textContainer?.widthTracksTextView = false
+        textView.focusScrollView = scrollView
+        textView.onToggleFocus = {
+            isFocused.toggle()
+            return isFocused
+        }
+
+        scrollView.documentView = textView
+        return scrollView
+    }
+
+    func updateNSView(_ nsView: FocusGatedScrollView, context: Context) {
+        nsView.isDocumentFocused = isFocused
+        guard let textView = nsView.documentView as? FocusToggleTextView else { return }
+        if textView.string != contents {
+            textView.string = contents
+        }
+    }
+}
+
+private final class FocusGatedScrollView: NSScrollView {
+    var isDocumentFocused = false
+
+    override func layout() {
+        super.layout()
+        guard let textView = documentView as? NSTextView else { return }
+        var frame = textView.frame
+        frame.size.width = max(frame.width, contentSize.width)
+        frame.size.height = max(frame.height, contentSize.height)
+        textView.frame = frame
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        guard isDocumentFocused else { return }
+        super.scrollWheel(with: event)
+    }
+}
+
+private final class FocusToggleTextView: NSTextView {
+    weak var focusScrollView: FocusGatedScrollView?
+    var onToggleFocus: (() -> Bool)?
+
+    override func mouseDown(with event: NSEvent) {
+        if let focused = onToggleFocus?() {
+            focusScrollView?.isDocumentFocused = focused
+        }
+        super.mouseDown(with: event)
     }
 }
 
