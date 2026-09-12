@@ -261,7 +261,8 @@ struct NotesView: View {
                                 showRenameSheet = true
                             } label: {
                                 Image(systemName: "ellipsis")
-                                    .frame(width: 22, height: 22)
+                                    .font(.body)
+                                    .frame(width: 28, height: 28)
                             }
                             .buttonStyle(.borderless)
                             .help("Rename folder")
@@ -286,10 +287,6 @@ struct NotesView: View {
                                 .foregroundStyle(.secondary)
                             }
                             Spacer(minLength: 4)
-                            Image(systemName: "line.3.horizontal")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                                .padding(.vertical, 8)
                         }
                         .padding(.vertical, 5)
                         .contentShape(Rectangle())
@@ -323,6 +320,8 @@ struct NotesView: View {
                             library.create("# Untitled note\n\n")
                         } label: {
                             Image(systemName: "note.text.badge.plus")
+                                .font(.body)
+                                .frame(width: 28, height: 28)
                         }
                         .buttonStyle(.borderless)
                         .help("New note")
@@ -331,6 +330,8 @@ struct NotesView: View {
                             showCreateFolderSheet = true
                         } label: {
                             Image(systemName: "folder.badge.plus")
+                                .font(.body)
+                                .frame(width: 28, height: 28)
                         }
                         .buttonStyle(.borderless)
                         .help("New folder")
@@ -530,7 +531,7 @@ struct NotesView: View {
             HStack(spacing: 8) {
                 Label(title, systemImage: icon)
                 Spacer(minLength: 4)
-                Text(String(count)).font(.caption).foregroundStyle(.secondary)
+                Text(String(count)).font(.callout).foregroundStyle(.secondary)
             }
             .contentShape(Rectangle())
         }
