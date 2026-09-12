@@ -280,19 +280,17 @@ final class NotesLibrary: ObservableObject {
 private struct NotesHeaderIconControl: View {
     let systemName: String
     var tint: Color?
-    var iconFrameSize: CGFloat = 18
+    var iconFrameSize: CGFloat = 20
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
         Image(systemName: systemName)
-            .resizable()
-            .scaledToFit()
+            .font(.system(size: iconFrameSize, weight: .semibold))
             .foregroundStyle(
                 isEnabled
                     ? (tint ?? Color(nsColor: .labelColor))
                     : Color(nsColor: .disabledControlTextColor)
             )
-            .frame(width: iconFrameSize, height: iconFrameSize)
             .frame(width: 40, height: 32)
             .background(
                 RoundedRectangle(cornerRadius: 8)
@@ -716,9 +714,10 @@ struct NotesView: View {
                     Label("Append", systemImage: "text.append")
                 }
             } label: {
-                NotesHeaderIconControl(systemName: "wand.and.stars", iconFrameSize: 30)
+                NotesHeaderIconControl(systemName: "sparkles")
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(.button)
+            .buttonStyle(.plain)
             .disabled(appState.isRecording || appState.isTranscribing)
             .accessibilityLabel("Note actions")
             .help("Update or append to this note")
