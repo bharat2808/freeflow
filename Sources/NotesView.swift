@@ -239,6 +239,33 @@ final class NotesLibrary: ObservableObject {
         }
     }
 
+    func deleteFolder(_ folder: String) {
+        let value = folder.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        let affectedNotes = notes.filter {
+            $0.folder == value || $0.folder.hasPrefix(value + "/")
+        }
+        do {
+            for note in affectedNotes {
+                try flushPendingSave(for: note)
+            }
+            for note in affectedNotes {
+                guard let index = notes.firstIndex(where: { $0.id == note.id }) else { continue }
+                notes[index] = try store.move(note, toFolder: "")
+            }
+            try store.deleteFolder(value)
+            notes.sort { $0.modified > $1.modified }
+            savedFolders = store.loadFolders()
+            if let selectedID, affectedNotes.contains(where: { $0.id == selectedID }) {
+                self.selectedID = selectedID
+            }
+            error = nil
+        } catch {
+            self.error = "Could not delete folder: \(error.localizedDescription)"
+            reload()
+        }
+    }
+
     private func flushPendingSave(for note: MarkdownNote) throws {
         pendingSaveWorkItems[note.id]?.cancel()
         pendingSaveWorkItems[note.id] = nil
@@ -263,6 +290,8 @@ struct NotesView: View {
     @State private var renameFolderName = ""
     @State private var selectedFolderForRename: String?
     @State private var showDeleteConfirmation = false
+    @State private var showDeleteFolderConfirmation = false
+    @State private var selectedFolderForDelete: String?
     @State private var expandedFolders: Set<String> = []
     @State private var collapsedFolders: Set<String> = []
 
@@ -478,6 +507,23 @@ struct NotesView: View {
         } message: {
             Text("This permanently deletes the Markdown file from your notes folder.")
         }
+        .confirmationDialog(
+            "Delete this folder?",
+            isPresented: $showDeleteFolderConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete folder", role: .destructive) {
+                if let folder = selectedFolderForDelete {
+                    library.deleteFolder(folder)
+                }
+                selectedFolderForDelete = nil
+            }
+            Button("Cancel", role: .cancel) {
+                selectedFolderForDelete = nil
+            }
+        } message: {
+            Text("Notes in this folder and its subfolders will be moved to Inbox. Their attachments will be kept.")
+        }
         .sheet(isPresented: $showMoveSheet) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Move note").font(.title2.weight(.semibold))
@@ -593,17 +639,28 @@ struct NotesView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
             if !folder.isEmpty {
-                Button {
-                    selectedFolderForRename = folder
-                    renameFolderName = folder
-                    showRenameSheet = true
+                Menu {
+                    Button {
+                        selectedFolderForRename = folder
+                        renameFolderName = folder
+                        showRenameSheet = true
+                    } label: {
+                        Label("Rename folder", systemImage: "pencil")
+                    }
+                    Button(role: .destructive) {
+                        selectedFolderForDelete = folder
+                        showDeleteFolderConfirmation = true
+                    } label: {
+                        Label("Delete folder", systemImage: "trash")
+                    }
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.body)
                         .frame(width: 28, height: 28)
                 }
                 .buttonStyle(.borderless)
-                .help("Rename folder")
+                .menuStyle(.borderlessButton)
+                .help("Folder actions")
             }
         }
         .contentShape(Rectangle())

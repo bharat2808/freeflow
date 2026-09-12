@@ -161,6 +161,20 @@ When adding an attachment, place it on its own line with a blank line before and
         )
     }
 
+    func deleteFolder(_ requestedFolder: String) throws {
+        let folder = normalizedFolder(requestedFolder)
+        guard !folder.isEmpty else {
+            throw NSError(
+                domain: NSCocoaErrorDomain,
+                code: NSFileWriteInvalidFileNameError,
+                userInfo: [NSLocalizedDescriptionKey: "The Inbox folder cannot be deleted."]
+            )
+        }
+        let folderURL = directory.appendingPathComponent(folder, isDirectory: true)
+        guard FileManager.default.fileExists(atPath: folderURL.path) else { return }
+        try FileManager.default.removeItem(at: folderURL)
+    }
+
     func save(_ note: MarkdownNote) throws {
         let folder = normalizedFolder(note.folder)
         let folderURL = directory.appendingPathComponent(folder, isDirectory: true)
