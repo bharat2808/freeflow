@@ -5,11 +5,13 @@ enum LocalWhisperTranscriptionServiceTests {
         private let lock = NSLock()
         private var transcriptionCount = 0
         private var updates = [String]()
+        private var sampleByteCounts = [Int]()
 
-        func nextTranscript() -> String {
+        func nextTranscript(sampleByteCount: Int) -> String {
             lock.withLock {
                 transcriptionCount += 1
-                return "chunk \(transcriptionCount)"
+                sampleByteCounts.append(sampleByteCount)
+                return (1...transcriptionCount).map { "chunk \($0)" }.joined(separator: " ")
             }
         }
 
@@ -25,6 +27,10 @@ enum LocalWhisperTranscriptionServiceTests {
 
         var recordedUpdates: [String] {
             lock.withLock { updates }
+        }
+
+        var recordedSampleByteCounts: [Int] {
+            lock.withLock { sampleByteCounts }
         }
     }
 
@@ -77,9 +83,9 @@ enum LocalWhisperTranscriptionServiceTests {
     private static func verifyPreviewContinuesAcrossChunks() async throws {
         let state = PreviewTestState()
         let session = LocalWhisperPreviewSession(
-            transcribe: { _, sampleRate in
+            transcribe: { samples, sampleRate in
                 TestSupport.expectEqual(sampleRate, 16_000)
-                return state.nextTranscript()
+                return state.nextTranscript(sampleByteCount: samples.count)
             },
             onUpdate: { transcript in
                 state.record(transcript)
@@ -90,6 +96,10 @@ enum LocalWhisperTranscriptionServiceTests {
         let chunk = Data(bytes: &sample, count: MemoryLayout<Int16>.size)
         let threeSeconds = Data(repeating: chunk[0], count: 16_000 * 3 * MemoryLayout<Int16>.size)
         session.appendPCM16(threeSeconds)
+
+        for _ in 0..<200 where state.updateCount < 1 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
         session.appendPCM16(threeSeconds)
 
         for _ in 0..<200 where state.updateCount < 2 {
@@ -97,5 +107,9 @@ enum LocalWhisperTranscriptionServiceTests {
         }
         session.stop()
         TestSupport.expectEqual(state.recordedUpdates, ["chunk 1", "chunk 1 chunk 2"])
+        TestSupport.expectEqual(
+            state.recordedSampleByteCounts,
+            [threeSeconds.count, threeSeconds.count * 2]
+        )
     }
 }
