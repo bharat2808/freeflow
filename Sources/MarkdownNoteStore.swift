@@ -163,15 +163,89 @@ requires a change. If the instruction is ambiguous, make the smallest reasonable
         try note.markdown.write(to: folderURL.appendingPathComponent(note.id.uuidString + ".md"), atomically: true, encoding: .utf8)
     }
 
+    func attachmentDirectory(for note: MarkdownNote) -> URL {
+        directory
+            .appendingPathComponent(normalizedFolder(note.folder), isDirectory: true)
+            .appendingPathComponent(note.id.uuidString, isDirectory: true)
+    }
+
+    func noteFolderURL(for note: MarkdownNote) -> URL {
+        directory.appendingPathComponent(normalizedFolder(note.folder), isDirectory: true)
+    }
+
+    func prepareAttachmentDirectory(for note: MarkdownNote) throws -> URL {
+        let url = attachmentDirectory(for: note)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    func attachmentURL(for note: MarkdownNote, relativePath: String) -> URL? {
+        let noteFolder = directory.appendingPathComponent(normalizedFolder(note.folder), isDirectory: true)
+        let candidate = noteFolder.appendingPathComponent(relativePath).standardizedFileURL
+        let root = noteFolder.standardizedFileURL.path.hasSuffix("/")
+            ? noteFolder.standardizedFileURL.path
+            : noteFolder.standardizedFileURL.path + "/"
+        guard candidate.path.hasPrefix(root), candidate.pathExtension.isEmpty == false else { return nil }
+        return candidate
+    }
+
+    func importAttachment(from sourceURL: URL, for note: MarkdownNote) throws -> String {
+        let attachmentFolder = try prepareAttachmentDirectory(for: note)
+        let baseName = sourceURL.deletingPathExtension().lastPathComponent
+        let extensionName = sourceURL.pathExtension.lowercased()
+        let safeBaseName = baseName
+            .replacingOccurrences(of: "[^A-Za-z0-9._-]+", with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        let fileName = (safeBaseName.isEmpty ? "attachment" : safeBaseName) +
+            (extensionName.isEmpty ? "" : ".\(extensionName)")
+        let destination = uniqueURL(in: attachmentFolder, fileName: fileName)
+        try FileManager.default.copyItem(at: sourceURL, to: destination)
+        return "\(note.id.uuidString)/\(destination.lastPathComponent)"
+    }
+
+    func writeAttachment(_ data: Data, fileName: String, for note: MarkdownNote) throws -> String {
+        let attachmentFolder = try prepareAttachmentDirectory(for: note)
+        let destination = uniqueURL(in: attachmentFolder, fileName: fileName)
+        try data.write(to: destination, options: .atomic)
+        return "\(note.id.uuidString)/\(destination.lastPathComponent)"
+    }
+
+    private func uniqueURL(in directory: URL, fileName: String) -> URL {
+        let base = directory.appendingPathComponent(fileName)
+        guard FileManager.default.fileExists(atPath: base.path) else { return base }
+        let stem = base.deletingPathExtension().lastPathComponent
+        let ext = base.pathExtension
+        var index = 2
+        while true {
+            let candidate = directory.appendingPathComponent("\(stem)-\(index).\(ext)")
+            if !FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+            index += 1
+        }
+    }
+
     func move(_ note: MarkdownNote, toFolder requestedFolder: String) throws -> MarkdownNote {
         let sourceFolder = directory.appendingPathComponent(normalizedFolder(note.folder), isDirectory: true)
         let sourceURL = sourceFolder.appendingPathComponent(note.id.uuidString + ".md")
         let folder = normalizedFolder(requestedFolder)
         let destinationFolder = directory.appendingPathComponent(folder, isDirectory: true)
         let destinationURL = destinationFolder.appendingPathComponent(note.id.uuidString + ".md")
+        let sourceAttachments = attachmentDirectory(for: note)
+        let destinationAttachments = destinationFolder.appendingPathComponent(note.id.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: destinationFolder, withIntermediateDirectories: true)
+        if sourceAttachments.standardizedFileURL != destinationAttachments.standardizedFileURL,
+           FileManager.default.fileExists(atPath: sourceAttachments.path),
+           FileManager.default.fileExists(atPath: destinationAttachments.path) {
+            throw CocoaError(.fileWriteFileExists)
+        }
         if sourceURL.standardizedFileURL != destinationURL.standardizedFileURL {
             try FileManager.default.moveItem(at: sourceURL, to: destinationURL)
+        }
+        if FileManager.default.fileExists(atPath: sourceAttachments.path),
+           sourceAttachments.standardizedFileURL != destinationAttachments.standardizedFileURL {
+            if FileManager.default.fileExists(atPath: destinationAttachments.path) {
+                throw CocoaError(.fileWriteFileExists)
+            }
+            try FileManager.default.moveItem(at: sourceAttachments, to: destinationAttachments)
         }
         return MarkdownNote(id: note.id, markdown: note.markdown, modified: note.modified, folder: folder)
     }
@@ -184,6 +258,10 @@ requires a change. If the instruction is ambiguous, make the smallest reasonable
             throw CocoaError(.fileNoSuchFile)
         }
         try FileManager.default.removeItem(at: noteURL)
+        let attachments = folderURL.appendingPathComponent(note.id.uuidString, isDirectory: true)
+        if FileManager.default.fileExists(atPath: attachments.path) {
+            try FileManager.default.removeItem(at: attachments)
+        }
     }
 
     func renameFolder(from requestedSource: String, to requestedDestination: String) throws {

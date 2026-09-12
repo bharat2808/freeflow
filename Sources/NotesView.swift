@@ -81,6 +81,26 @@ final class NotesLibrary: ObservableObject {
     }
 
     @discardableResult
+    func importAttachment(_ payload: NoteAttachmentPayload, for noteID: UUID) -> String? {
+        guard let index = notes.firstIndex(where: { $0.id == noteID }) else { return nil }
+        let note = notes[index]
+        do {
+            let path: String
+            if let sourceURL = payload.sourceURL {
+                path = try store.importAttachment(from: sourceURL, for: note)
+            } else if let imageData = payload.imageData {
+                path = try store.writeAttachment(imageData, fileName: payload.fileName, for: note)
+            } else {
+                return nil
+            }
+            return path
+        } catch let attachmentError {
+            self.error = "Could not add attachment: \(attachmentError.localizedDescription)"
+            return nil
+        }
+    }
+
+    @discardableResult
     func update(id: UUID, markdown: String) -> Bool {
         guard let index = notes.firstIndex(where: { $0.id == id }) else { return false }
         let updated = MarkdownNote(
@@ -337,16 +357,25 @@ struct NotesView: View {
                     noteHeader(note)
                     if preview {
                         ScrollView {
-                            Markdown(note.markdown)
+                            NoteMarkdownPreview(markdown: note.markdown, note: note)
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(28)
                         }
                     } else {
-                        TextEditor(text: Binding(get: {
+                        MarkdownNoteEditor(text: Binding(get: {
                             library.notes.first(where: { $0.id == note.id })?.markdown ?? ""
-                        }, set: { library.edit(id: note.id, markdown: $0) }))
-                        .font(.system(.body, design: .monospaced)).padding(18)
+                        }, set: { library.edit(id: note.id, markdown: $0) })) { payload in
+                            library.importAttachment(payload, for: note.id).map { path in
+                                switch payload.kind {
+                                case .image:
+                                    return "\n\n![\(payload.fileName)](\(path))\n\n"
+                                case .video, .audio:
+                                    return "\n\n[\(payload.fileName)](\(path))\n\n"
+                                }
+                            }
+                        }
+                        .padding(18)
                     }
                 } else {
                     VStack(spacing: 14) {
