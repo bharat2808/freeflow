@@ -187,7 +187,6 @@ struct NotesView: View {
     @State private var renameFolderName = ""
     @State private var selectedFolderForRename: String?
     @State private var showDeleteConfirmation = false
-    @State private var folderFilter = "__all__"
 
     private var selectedNoteFolder: String? {
         guard let selectedID = library.selectedID else { return nil }
@@ -195,22 +194,35 @@ struct NotesView: View {
         return folder.isEmpty ? nil : folder
     }
 
-    private var visibleFolders: [String] {
-        library.folders.filter { !$0.isEmpty }
+    private var sidebarFolders: [String] {
+        [""] + library.folders.filter { !$0.isEmpty }
     }
 
-    private var visibleNotes: [MarkdownNote] {
-        library.notes.filter { note in
-            let matchesFolder = folderFilter == "__all__"
-                || (folderFilter == "__inbox__" ? note.folder.isEmpty : note.folder == folderFilter)
-            return matchesFolder && (search.isEmpty || note.markdown.localizedCaseInsensitiveContains(search))
+    private func notes(in folder: String) -> [MarkdownNote] {
+        library.notes
+            .filter { note in
+                note.folder == folder
+                    && (search.isEmpty || note.markdown.localizedCaseInsensitiveContains(search))
+            }
+            .sorted { $0.modified > $1.modified }
+    }
+
+    private func dateGroups(for notes: [MarkdownNote]) -> [(String, [MarkdownNote])] {
+        let calendar = Calendar.current
+        let grouped = Dictionary(grouping: notes) { note in
+            calendar.startOfDay(for: note.modified)
         }
-    }
-
-    private func noteCount(in folder: String) -> Int {
-        library.notes.filter { note in
-            note.folder == folder || note.folder.hasPrefix(folder + "/")
-        }.count
+        return grouped.keys.sorted(by: >).map { date in
+            let title: String
+            if calendar.isDateInToday(date) {
+                title = "Today"
+            } else if calendar.isDateInYesterday(date) {
+                title = "Yesterday"
+            } else {
+                title = date.formatted(date: .abbreviated, time: .omitted)
+            }
+            return (title, grouped[date, default: []].sorted { $0.modified > $1.modified })
+        }
     }
 
     private func moveDroppedNote(from providers: [NSItemProvider], to folder: String) -> Bool {
@@ -221,7 +233,6 @@ struct NotesView: View {
             DispatchQueue.main.async {
                 library.selectedID = noteID
                 library.moveSelected(to: folder)
-                folderFilter = folder.isEmpty ? "__inbox__" : folder
             }
         }
         return true
@@ -236,80 +247,22 @@ struct NotesView: View {
     var body: some View {
         NavigationSplitView {
             List(selection: $library.selectedID) {
-                Section("Folders") {
-                    folderRow(title: "All Notes", icon: "note.text", id: "__all__", count: library.notes.count)
-                    folderRow(
-                        title: "Inbox",
-                        icon: "tray",
-                        id: "__inbox__",
-                        count: library.notes.filter { $0.folder.isEmpty }.count
-                    )
-                    .onDrop(of: [UTType.text.identifier], isTargeted: nil) { providers in
-                        moveDroppedNote(from: providers, to: "")
-                    }
-                    ForEach(visibleFolders, id: \.self) { folder in
-                        HStack(spacing: 8) {
-                            folderRow(
-                                title: folder,
-                                icon: "folder",
-                                id: folder,
-                                count: noteCount(in: folder)
-                            )
-                            Button {
-                                selectedFolderForRename = folder
-                                renameFolderName = folder
-                                showRenameSheet = true
-                            } label: {
-                                Image(systemName: "ellipsis")
-                                    .font(.body)
-                                    .frame(width: 28, height: 28)
+                Section {
+                    ForEach(sidebarFolders, id: \.self) { folder in
+                        let folderNotes = notes(in: folder)
+                        Section {
+                            ForEach(dateGroups(for: folderNotes), id: \.0) { dateTitle, dateNotes in
+                                Section(dateTitle) {
+                                    ForEach(dateNotes) { note in
+                                        noteRow(note)
+                                    }
+                                }
                             }
-                            .buttonStyle(.borderless)
-                            .help("Rename folder")
+                        } header: {
+                            folderHeader(folder)
                         }
                         .onDrop(of: [UTType.text.identifier], isTargeted: nil) { providers in
                             moveDroppedNote(from: providers, to: folder)
-                        }
-                    }
-                }
-                Section {
-                    ForEach(visibleNotes) { note in
-                        HStack(spacing: 8) {
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text(note.title).font(.headline).lineLimit(2)
-                                HStack(spacing: 6) {
-                                    if folderFilter == "__all__", !note.folder.isEmpty {
-                                        Label(note.folder, systemImage: "folder")
-                                    }
-                                    Text(note.modified, style: .date)
-                                }
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            }
-                            Spacer(minLength: 4)
-                        }
-                        .padding(.vertical, 5)
-                        .contentShape(Rectangle())
-                        .tag(note.id)
-                        .draggable(note.id.uuidString) {
-                            Label(note.title, systemImage: "note.text")
-                                .padding(8)
-                                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-                        }
-                        .contextMenu {
-                            Button {
-                                library.selectedID = note.id
-                                destinationFolder = note.folder
-                                showMoveSheet = true
-                            } label: {
-                                Label("Move note…", systemImage: "folder.badge.arrow.forward")
-                            }
-                            Button(role: .destructive) {
-                                library.selectedID = note.id
-                                showDeleteConfirmation = true
-                            } label: {
-                                Label("Delete note", systemImage: "trash")
-                            }
                         }
                     }
                 } header: {
@@ -506,11 +459,7 @@ struct NotesView: View {
                     Button("Cancel") { showRenameSheet = false }
                     Button("Rename") {
                         if let folder = selectedFolderForRename ?? selectedNoteFolder {
-                            let replacement = renameFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
                             library.renameFolder(from: folder, to: renameFolderName)
-                            if folderFilter == folder, !replacement.isEmpty {
-                                folderFilter = replacement
-                            }
                         }
                         selectedFolderForRename = nil
                         showRenameSheet = false
@@ -523,20 +472,64 @@ struct NotesView: View {
         .frame(minWidth: 800, minHeight: 520)
     }
 
-    @ViewBuilder
-    private func folderRow(title: String, icon: String, id: String, count: Int) -> some View {
-        Button {
-            folderFilter = id
-        } label: {
-            HStack(spacing: 8) {
-                Label(title, systemImage: icon)
-                Spacer(minLength: 4)
-                Text(String(count)).font(.callout).foregroundStyle(.secondary)
+    private func folderHeader(_ folder: String) -> some View {
+        HStack(spacing: 8) {
+            Label(folder.isEmpty ? "Inbox" : folder, systemImage: folder.isEmpty ? "tray" : "folder")
+                .font(.headline)
+            Spacer(minLength: 4)
+            Text(String(notes(in: folder).count))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            if !folder.isEmpty {
+                Button {
+                    selectedFolderForRename = folder
+                    renameFolderName = folder
+                    showRenameSheet = true
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.body)
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.borderless)
+                .help("Rename folder")
             }
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(folderFilter == id ? Color.accentColor : Color.primary)
+        .contentShape(Rectangle())
+    }
+
+    private func noteRow(_ note: MarkdownNote) -> some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(note.title).font(.headline).lineLimit(2)
+                Text(note.modified, style: .time)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 4)
+        }
+        .padding(.vertical, 5)
+        .contentShape(Rectangle())
+        .tag(note.id)
+        .draggable(note.id.uuidString) {
+            Label(note.title, systemImage: "note.text")
+                .padding(8)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        }
+        .contextMenu {
+            Button {
+                library.selectedID = note.id
+                destinationFolder = note.folder
+                showMoveSheet = true
+            } label: {
+                Label("Move note…", systemImage: "folder.badge.arrow.forward")
+            }
+            Button(role: .destructive) {
+                library.selectedID = note.id
+                showDeleteConfirmation = true
+            } label: {
+                Label("Delete note", systemImage: "trash")
+            }
+        }
     }
 }
 
