@@ -197,30 +197,134 @@ private struct TextAttachmentView: View {
     let label: String
     let url: URL
     @State private var isFocused = false
+    @State private var isPreviewingHTML = false
+    @State private var isHTMLPreviewFocused = false
+    @State private var isEditing = false
+    @State private var draft: String?
+    @State private var saveError: String?
 
     var body: some View {
-        if ["html", "htm"].contains(url.pathExtension.lowercased()) {
-            HTMLAttachmentView(label: label, url: url)
-        } else {
-            textSourceView
-        }
-    }
-
-    private var textSourceView: some View {
         VStack(alignment: .leading, spacing: 6) {
-            AttachmentHeader(label: label, icon: "doc.text", url: url)
-            if let contents = try? String(contentsOf: url, encoding: .utf8) {
+            attachmentHeader
+            if isHTML && isPreviewingHTML {
+                HTMLWebView(url: url, isFocused: $isHTMLPreviewFocused)
+                    .frame(maxWidth: .infinity, minHeight: 520, maxHeight: 900)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(
+                                isHTMLPreviewFocused ? Color.accentColor : Color.secondary.opacity(0.25),
+                                lineWidth: 1
+                            )
+                    }
+            } else if isEditing {
+                TextEditor(text: draftBinding)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(maxWidth: .infinity, minHeight: 420, maxHeight: 800)
+                    .padding(8)
+                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.accentColor, lineWidth: 1)
+                    }
+            } else if let contents = try? String(contentsOf: url, encoding: .utf8) {
                 FocusToggleTextScrollView(contents: contents, isFocused: $isFocused)
-                .frame(maxWidth: .infinity, minHeight: 420, maxHeight: 800)
-                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(isFocused ? Color.accentColor : Color.clear, lineWidth: 1)
-                }
+                    .frame(maxWidth: .infinity, minHeight: 420, maxHeight: 800)
+                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(isFocused ? Color.accentColor : Color.clear, lineWidth: 1)
+                    }
             } else {
                 Text("This text file could not be decoded as UTF-8.")
                     .foregroundStyle(.secondary)
             }
+            if let saveError {
+                Text(saveError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var attachmentHeader: some View {
+        HStack(spacing: 10) {
+            Label(label, systemImage: isHTML ? "globe" : "doc.text")
+                .font(.headline)
+                .lineLimit(1)
+            Spacer()
+            if isHTML {
+                Button {
+                    isPreviewingHTML.toggle()
+                    isEditing = false
+                    saveError = nil
+                } label: {
+                    Label(
+                        isPreviewingHTML ? "Source" : "Preview",
+                        systemImage: isPreviewingHTML ? "chevron.left.forwardslash.chevron.right" : "eye"
+                    )
+                }
+                .buttonStyle(.borderless)
+            }
+            if isEditing {
+                Button("Cancel", action: cancelEditing)
+                    .buttonStyle(.borderless)
+                Button("Save", action: saveEditing)
+                    .buttonStyle(.borderedProminent)
+            } else {
+                Button(action: beginEditing) {
+                    Label("Edit", systemImage: "pencil")
+                }
+                .buttonStyle(.borderless)
+            }
+            Button {
+                NSWorkspace.shared.open(url)
+            } label: {
+                Label("Open externally", systemImage: "arrow.up.right.square")
+            }
+            .buttonStyle(.borderless)
+            .help("Open in the default app")
+        }
+    }
+
+    private var isHTML: Bool {
+        ["html", "htm"].contains(url.pathExtension.lowercased())
+    }
+
+    private var draftBinding: Binding<String> {
+        Binding(
+            get: { draft ?? "" },
+            set: { draft = $0 }
+        )
+    }
+
+    private func beginEditing() {
+        guard let contents = try? String(contentsOf: url, encoding: .utf8) else {
+            saveError = "This file could not be decoded as UTF-8."
+            return
+        }
+        draft = contents
+        isPreviewingHTML = false
+        isEditing = true
+        saveError = nil
+    }
+
+    private func cancelEditing() {
+        draft = nil
+        isEditing = false
+        saveError = nil
+    }
+
+    private func saveEditing() {
+        guard let draft else { return }
+        do {
+            try draft.write(to: url, atomically: true, encoding: .utf8)
+            self.draft = nil
+            isEditing = false
+            saveError = nil
+        } catch {
+            saveError = "Could not save this attachment: \(error.localizedDescription)"
         }
     }
 }
@@ -304,25 +408,6 @@ private final class FocusToggleTextView: NSTextView {
             focusScrollView?.isDocumentFocused = focused
         }
         super.mouseDown(with: event)
-    }
-}
-
-private struct HTMLAttachmentView: View {
-    let label: String
-    let url: URL
-    @State private var isFocused = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            AttachmentHeader(label: label, icon: "globe", url: url)
-            HTMLWebView(url: url, isFocused: $isFocused)
-                .frame(maxWidth: .infinity, minHeight: 520, maxHeight: 900)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(isFocused ? Color.accentColor : Color.secondary.opacity(0.25), lineWidth: 1)
-                }
-        }
     }
 }
 
