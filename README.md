@@ -109,6 +109,15 @@ defaults delete com.zachlatta.freeflow context_request_timeout_seconds
 
 </details>
 
+## Agent Notes Connector
+
+FreeFlow includes an optional local MCP connector for agents that support stdio
+servers. Build it with `make connector-build`, then print a client configuration
+with `build/freeflow-notes-mcp config --client codex` (or `claude`). Start the
+server with `build/freeflow-notes-mcp serve --stdio`. It exposes the local notes
+library through the `usage_guidelines`, `notes`, and `search_notes` tools; access
+is restricted to the FreeFlow notes directory.
+
 ## License
 
 Licensed under the MIT license.
