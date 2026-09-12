@@ -685,7 +685,9 @@ struct NotesView: View {
                 library.undoSelectedNote()
             } label: {
                 Image(systemName: "arrow.uturn.backward")
-                    .font(.system(size: 16, weight: .semibold))
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 18, height: 18)
                     .frame(width: 28, height: 28)
             }
             .disabled(!library.canUndoSelectedNote)
@@ -704,7 +706,9 @@ struct NotesView: View {
                 }
             } label: {
                 Image(systemName: "wand.and.stars")
-                    .font(.system(size: 16, weight: .semibold))
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 18, height: 18)
                     .frame(width: 28, height: 28)
             }
             .disabled(appState.isRecording || appState.isTranscribing)
@@ -713,7 +717,9 @@ struct NotesView: View {
             .disabled(appState.isRecording || appState.isTranscribing)
             Toggle(isOn: $preview) {
                 Image(systemName: "eye")
-                    .font(.system(size: 16, weight: .semibold))
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 18, height: 18)
                     .frame(width: 28, height: 28)
             }
             .toggleStyle(.button)
