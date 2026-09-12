@@ -19,7 +19,7 @@ struct NoteMarkdownPreview: View {
                 } else if let webLink = webLink(in: block) {
                     ExternalLinkView(label: webLink.label, url: webLink.url)
                 } else if !block.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Markdown(block, baseURL: store.noteFolderURL(for: note))
+                    Markdown(markdownWithLinkAffordances(block), baseURL: store.noteFolderURL(for: note))
                         .environment(\.openURL, OpenURLAction { url in
                             NSWorkspace.shared.open(url)
                             return .handled
@@ -65,6 +65,28 @@ struct NoteMarkdownPreview: View {
               let url = URL(string: String(value[urlStart..<urlEnd])),
               url.scheme == "http" || url.scheme == "https" else { return nil }
         return (label, url)
+    }
+
+    private func markdownWithLinkAffordances(_ source: String) -> String {
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
+            return source
+        }
+        let fullRange = NSRange(source.startIndex..<source.endIndex, in: source)
+        let matches = detector.matches(in: source, options: [], range: fullRange)
+        var result = source
+        for match in matches.reversed() {
+            guard let url = match.url else { continue }
+            let range = match.range
+            let prefixStart = max(0, range.location - 2)
+            let prefix = (result as NSString).substring(with: NSRange(location: prefixStart, length: range.location - prefixStart))
+            // Markdown links are already handled by the standalone link view or
+            // retain their original label; only decorate bare URLs here.
+            guard prefix != "](" else { continue }
+            let visibleURL = (result as NSString).substring(with: range)
+            let replacement = "[\(visibleURL) ↗](\(url.absoluteString))"
+            result = (result as NSString).replacingCharacters(in: range, with: replacement)
+        }
+        return result
     }
 }
 
