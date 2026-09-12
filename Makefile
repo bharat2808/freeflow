@@ -1,19 +1,14 @@
-APP_NAME ?= FreeFlow
-BUNDLE_ID ?= com.zachlatta.freeflow
+APP_NAME ?= FreeFlow Dev
+BUNDLE_ID ?= com.zachlatta.freeflow.dev
 BUILD_DIR = build
 APP_BUNDLE = $(BUILD_DIR)/$(APP_NAME).app
+CODESIGN_IDENTITY ?= FreeFlow Dev
 CONTENTS = $(APP_BUNDLE)/Contents
 MACOS_DIR = $(CONTENTS)/MacOS
 empty :=
 space := $(empty) $(empty)
 APP_EXECUTABLE = $(MACOS_DIR)/$(APP_NAME)
 APP_EXECUTABLE_TARGET := $(subst $(space),\ ,$(APP_EXECUTABLE))
-
-# TCC permissions such as Accessibility are tied to the code signature. Use
-# the first local Apple Development identity when one is available so rebuilds
-# keep the same designated requirement; otherwise fall back to ad-hoc signing.
-DEVELOPMENT_IDENTITY := $(shell security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Apple Development:.*\)"/\1/p' | head -n 1)
-CODESIGN_IDENTITY ?= $(if $(DEVELOPMENT_IDENTITY),$(DEVELOPMENT_IDENTITY),-)
 
 SOURCES = $(shell find Sources -name '*.swift' -type f | LC_ALL=C sort)
 TEST_RUNNER = $(BUILD_DIR)/FreeFlowTests
@@ -49,7 +44,7 @@ ICON_SOURCE = Resources/AppIcon-Source.png
 ICON_ICNS = Resources/AppIcon.icns
 endif
 
-.PHONY: all check clean run dev icon dmg codesign-dmg notarize test typecheck validate
+.PHONY: all check clean run icon dmg codesign-dmg notarize test typecheck validate
 
 all: $(APP_EXECUTABLE_TARGET)
 
@@ -176,8 +171,3 @@ clean:
 
 run: all
 	open "$(APP_BUNDLE)"
-
-# The developer bundle is opt-in. Keeping it explicit prevents macOS
-# permissions and settings from silently switching between app identities.
-dev:
-	$(MAKE) APP_NAME="FreeFlow Dev" BUNDLE_ID=com.zachlatta.freeflow.dev all
