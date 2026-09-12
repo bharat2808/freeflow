@@ -452,8 +452,8 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
     private let stateLock = OSAllocatedUnfairLock(initialState: ())
     private var audio = Data()
     private var committedTranscript = ""
-    private var processing = false
     private var stopped = false
+    private var workerRunning = false
     private var workerTask: Task<Void, Never>?
 
     private let sampleRate = 24_000
@@ -470,20 +470,27 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
 
     func appendPCM16(_ samples: Data) {
         guard !samples.isEmpty else { return }
-        let snapshot: Data? = stateLock.withLock {
-            guard !stopped else { return nil }
+        let shouldStartWorker = stateLock.withLock { () -> Bool in
+            guard !stopped else { return false }
             audio.append(samples)
             let bytesPerFrame = MemoryLayout<Int16>.size
             let maxBytes = maxBufferedFrames * bytesPerFrame
             if audio.count > maxBytes {
                 audio.removeFirst(audio.count - maxBytes)
             }
-            return nextChunkIfReadyLocked()
+            let chunkBytes = chunkFrames * bytesPerFrame
+            guard !workerRunning, audio.count >= chunkBytes else { return false }
+            workerRunning = true
+            return true
         }
 
-        guard let snapshot else { return }
-        workerTask = Task { [weak self] in
-            await self?.process(snapshot)
+        guard shouldStartWorker else { return }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.drainAudio()
+        }
+        stateLock.withLock {
+            workerTask = task
         }
     }
 
@@ -492,17 +499,42 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
             stopped = true
             workerTask?.cancel()
             workerTask = nil
+            workerRunning = false
         }
     }
 
-    private func nextChunkIfReadyLocked() -> Data? {
-        guard !processing else { return nil }
+    private func nextChunkLocked() -> Data? {
         let chunkBytes = chunkFrames * MemoryLayout<Int16>.size
         guard audio.count >= chunkBytes else { return nil }
-        processing = true
         let chunk = Data(audio.prefix(chunkBytes))
         audio.removeFirst(chunkBytes)
         return chunk
+    }
+
+    private func drainAudio() async {
+        while !Task.isCancelled {
+            let snapshot: Data? = stateLock.withLock {
+                guard !stopped else {
+                    workerRunning = false
+                    return nil
+                }
+                return nextChunkLocked()
+            }
+
+            guard let snapshot else {
+                stateLock.withLock {
+                    workerRunning = false
+                    workerTask = nil
+                }
+                return
+            }
+            await process(snapshot)
+        }
+
+        stateLock.withLock {
+            workerRunning = false
+            workerTask = nil
+        }
     }
 
     private func process(_ snapshot: Data) async {
@@ -530,24 +562,6 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
         } catch {
             // Preview failures are non-fatal; the final stop-time transcription
             // still reports actionable errors to the user.
-        }
-
-        let nextSnapshot: Data? = stateLock.withLock {
-            if stopped {
-                processing = false
-                return nil
-            }
-            let next = nextChunkIfReadyLocked()
-            if next == nil {
-                processing = false
-            }
-            return next
-        }
-
-        if let nextSnapshot {
-            workerTask = Task { [weak self] in
-                await self?.process(nextSnapshot)
-            }
         }
     }
 

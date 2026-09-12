@@ -843,11 +843,22 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
         let outputBuffer = conversion.buffer
 
         let outputFrames = Int(outputBuffer.frameLength)
-        guard outputFrames > 0, let int16Ptr = outputBuffer.int16ChannelData?[0] else {
+        guard outputFrames > 0 else {
             return
         }
-        let byteCount = outputFrames * MemoryLayout<Int16>.size
-        let data = Data(bytes: int16Ptr, count: byteCount)
+        // The live-preview target is interleaved PCM16, so int16ChannelData
+        // may be nil even when the converted buffer contains valid audio.
+        let buffers = UnsafeMutableAudioBufferListPointer(outputBuffer.mutableAudioBufferList)
+        guard let audioBuffer = buffers.first,
+              let dataPointer = audioBuffer.mData,
+              audioBuffer.mDataByteSize > 0 else {
+            return
+        }
+        let byteCount = min(
+            Int(audioBuffer.mDataByteSize),
+            outputFrames * MemoryLayout<Int16>.size
+        )
+        let data = Data(bytes: dataPointer, count: byteCount)
         handler(data)
     }
 
