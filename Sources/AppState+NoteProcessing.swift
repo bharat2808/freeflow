@@ -43,14 +43,21 @@ extension AppState {
             preferredFallbackModel: postProcessingFallbackModel,
             instructionExecutionGuardEnabled: instructionExecutionGuardEnabled
         )
+        let protectedText = MarkdownNoteStore.protectMarkdownReferences(selectedText)
+        let attachmentPreservationPrompt = """
+
+Preserve every ATTACHMENT_N placeholder exactly as provided. These placeholders represent existing Markdown links or images and must not be renamed, removed, reformatted, or converted to plain text. Return only the transformed text.
+"""
         let result = try await service.postProcess(
-            transcript: selectedText,
+            transcript: protectedText.markdown,
             context: context,
             customVocabulary: customVocabulary,
-            customSystemPrompt: preset.instruction,
+            customSystemPrompt: preset.instruction + attachmentPreservationPrompt,
             outputLanguage: outputLanguage
         )
-        let processed = result.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        let processed = protectedText
+            .restore(in: result.transcript)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !processed.isEmpty else {
             throw PostProcessingError.emptyOutput
         }
