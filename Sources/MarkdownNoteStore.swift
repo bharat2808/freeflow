@@ -184,6 +184,16 @@ Only remove or convert a placeholder when the spoken instruction explicitly requ
         )?.compactMap { $0 as? URL } ?? []
         return urls.compactMap { url in
             guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { return nil }
+            // Each note stores its attachments in a sibling directory named
+            // after the note UUID. It is storage, not a user-facing folder.
+            if let noteID = UUID(uuidString: url.lastPathComponent),
+               FileManager.default.fileExists(
+                   atPath: url.deletingLastPathComponent()
+                       .appendingPathComponent("\(noteID.uuidString).md")
+                       .path
+               ) {
+                return nil
+            }
             let folder = relativeFolderPath(for: url)
             return folder.isEmpty ? nil : folder
         }
