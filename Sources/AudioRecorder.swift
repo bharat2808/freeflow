@@ -96,11 +96,12 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
     var onRecordingReady: (() -> Void)?
     var onRecordingFailure: ((Error) -> Void)?
     /// Fires on the sample-buffer queue with a 24 kHz mono PCM16 chunk for
-    /// each incoming audio buffer (matching OpenAI Realtime's default PCM
-    /// input rate). Set before ``startRecording`` to stream audio out-of-band
-    /// to a realtime transcription socket. The recorder writes a normalized
-    /// 16 kHz mono PCM16 WAV file independently for upload-based transcription.
+    /// realtime transcription services that require that input format.
     var onPCM16Samples: ((Data) -> Void)?
+    /// Fires with the same normalized 16 kHz mono PCM16 audio that is written
+    /// to the recording file. Local Whisper consumes this stream so its live
+    /// preview and final transcription use the same source audio.
+    var onRecordingPCM16Samples: ((Data) -> Void)?
     private let recordingConverterLock = OSAllocatedUnfairLock<AVAudioConverter?>(initialState: nil)
     private let pcm16ConverterLock = OSAllocatedUnfairLock<AVAudioConverter?>(initialState: nil)
     private let recordingTargetFormat: AVAudioFormat = {
@@ -402,6 +403,7 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
         if sourceFormat == targetFormat {
             try activeAudioFile.write(from: inputBuffer)
             recordedFrameCount += AVAudioFramePosition(inputBuffer.frameLength)
+            emitPCM16IfNeeded(from: inputBuffer)
             return
         }
 
@@ -413,6 +415,7 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
         guard outputBuffer.frameLength > 0 else { return }
         try activeAudioFile.write(from: outputBuffer)
         recordedFrameCount += AVAudioFramePosition(outputBuffer.frameLength)
+        emitPCM16IfNeeded(from: outputBuffer)
     }
 
     private func validatedPCMBufferFormat(
@@ -803,52 +806,13 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
         return Float(sqrt(sumOfSquares / Double(totalSamples)))
     }
 
-    private func emitPCM16IfNeeded(from sampleBuffer: CMSampleBuffer) {
-        guard let handler = onPCM16Samples else { return }
-        guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) else {
-            return
-        }
-        guard let validatedSourceFormat = try? validatedPCMBufferFormat(
-            AVAudioFormat(cmAudioFormatDescription: formatDescription),
-            context: "realtime transcription sample buffer"
-        ) else {
-            return
-        }
-        let sourceFormat = validatedSourceFormat
-        let frameCount = AVAudioFrameCount(CMSampleBufferGetNumSamples(sampleBuffer))
-        guard frameCount > 0 else { return }
-
-        guard let inputBuffer = try? makePCMBuffer(
-            from: sampleBuffer,
-            format: sourceFormat,
-            frameCount: frameCount
-        ) else { return }
-
-        let converter = pcm16ConverterLock.withLock { existing -> AVAudioConverter? in
-            if let existing, existing.inputFormat == sourceFormat {
-                return existing
-            }
-            let new = AVAudioConverter(from: sourceFormat, to: pcm16TargetFormat)
-            existing = new
-            return new
-        }
-        guard let converter else { return }
-
-        guard let conversion = try? convertBuffer(
-            inputBuffer,
-            from: sourceFormat,
-            using: converter,
-            to: pcm16TargetFormat
-        ) else { return }
-        let outputBuffer = conversion.buffer
-
-        let outputFrames = Int(outputBuffer.frameLength)
+    private func emitPCM16IfNeeded(from buffer: AVAudioPCMBuffer) {
+        guard let handler = onRecordingPCM16Samples else { return }
+        let outputFrames = Int(buffer.frameLength)
         guard outputFrames > 0 else {
             return
         }
-        // The live-preview target is interleaved PCM16, so int16ChannelData
-        // may be nil even when the converted buffer contains valid audio.
-        let buffers = UnsafeMutableAudioBufferListPointer(outputBuffer.mutableAudioBufferList)
+        let buffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
         guard let audioBuffer = buffers.first,
               let dataPointer = audioBuffer.mData,
               audioBuffer.mDataByteSize > 0 else {
@@ -860,6 +824,51 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
         )
         let data = Data(bytes: dataPointer, count: byteCount)
         handler(data)
+    }
+
+    private func emitRealtimePCM16IfNeeded(from sampleBuffer: CMSampleBuffer) {
+        guard let handler = onPCM16Samples else { return }
+        guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let sourceFormat = try? validatedPCMBufferFormat(
+                  AVAudioFormat(cmAudioFormatDescription: formatDescription),
+                  context: "realtime transcription sample buffer"
+              ) else { return }
+        let frameCount = AVAudioFrameCount(CMSampleBufferGetNumSamples(sampleBuffer))
+        guard frameCount > 0,
+              let inputBuffer = try? makePCMBuffer(
+                  from: sampleBuffer,
+                  format: sourceFormat,
+                  frameCount: frameCount
+              ) else { return }
+
+        let converter = pcm16ConverterLock.withLock { existing -> AVAudioConverter? in
+            if let existing, existing.inputFormat == sourceFormat {
+                return existing
+            }
+            let new = AVAudioConverter(from: sourceFormat, to: pcm16TargetFormat)
+            existing = new
+            return new
+        }
+        guard let converter,
+              let conversion = try? convertBuffer(
+                  inputBuffer,
+                  from: sourceFormat,
+                  using: converter,
+                  to: pcm16TargetFormat
+              ) else { return }
+
+        let outputBuffer = conversion.buffer
+        let outputFrames = Int(outputBuffer.frameLength)
+        guard outputFrames > 0 else { return }
+        let buffers = UnsafeMutableAudioBufferListPointer(outputBuffer.mutableAudioBufferList)
+        guard let audioBuffer = buffers.first,
+              let dataPointer = audioBuffer.mData,
+              audioBuffer.mDataByteSize > 0 else { return }
+        let byteCount = min(
+            Int(audioBuffer.mDataByteSize),
+            outputFrames * MemoryLayout<Int16>.size
+        )
+        handler(Data(bytes: dataPointer, count: byteCount))
     }
 
     func captureOutput(
@@ -880,7 +889,7 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
             return
         }
 
-        emitPCM16IfNeeded(from: sampleBuffer)
+        emitRealtimePCM16IfNeeded(from: sampleBuffer)
 
         let count = _bufferCount.withLock { value -> Int in
             value += 1
