@@ -653,7 +653,7 @@ struct NotesConnectorSettingsView: View {
             VStack(alignment: .leading, spacing: 18) {
                 Text("Notes Connector")
                     .font(.title2.weight(.bold))
-                Text("Connect Codex, Claude, Ollama, or another MCP-compatible agent to your local FreeFlow notes.")
+                Text("Connect a local AI client to your FreeFlow notes.")
                     .foregroundStyle(.secondary)
 
                 SettingsCard("Bundled connector", icon: "shippingbox") {
@@ -670,10 +670,6 @@ struct NotesConnectorSettingsView: View {
                             copyConfiguration()
                         }
                         .disabled(connectorURL == nil)
-                        Button("Run doctor") {
-                            runConnector(arguments: ["doctor"])
-                        }
-                        .disabled(connectorURL == nil)
                     }
                     if let commandOutput {
                         Text(commandOutput)
@@ -686,11 +682,11 @@ struct NotesConnectorSettingsView: View {
                     }
                 }
 
-                SettingsCard("Manual command", icon: "terminal") {
+                SettingsCard("Run server", icon: "terminal") {
                     Text("\"\(connectorPath)\" serve --stdio")
                         .font(.system(.caption, design: .monospaced))
                         .textSelection(.enabled)
-                    Text("The connector exposes usage_guidelines, notes, and BM25-ranked search_notes. Access is limited to the FreeFlow notes directory.")
+                    Text("Add this command to a client that supports local MCP servers.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

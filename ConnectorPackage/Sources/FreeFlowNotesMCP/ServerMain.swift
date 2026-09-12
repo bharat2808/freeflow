@@ -100,10 +100,7 @@ private extension Array { subscript(safe index: Int) -> Element? { indices.conta
             return
         }
         if arguments.first == "config" || arguments.first == "install" {
-            let client = arguments.dropFirst().first(where: { $0 != "--client" }) ?? "generic"
             let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.path
-            print("Client: \(client)")
-            print("Add this MCP server entry:")
             print("{\n  \"mcpServers\": {\n    \"freeflow-notes\": {\n      \"command\": \"\(executable)\",\n      \"args\": [\"serve\", \"--stdio\"]\n    }\n  }\n}")
             return
         }
