@@ -187,7 +187,7 @@ struct NotesView: View {
     @State private var renameFolderName = ""
     @State private var selectedFolderForRename: String?
     @State private var showDeleteConfirmation = false
-    @State private var expandedDateGroups: Set<String> = []
+    @State private var expandedFolders: Set<String> = []
 
     private var selectedNoteFolder: String? {
         guard let selectedID = library.selectedID else { return nil }
@@ -250,38 +250,7 @@ struct NotesView: View {
             List(selection: $library.selectedID) {
                 Section {
                     ForEach(sidebarFolders, id: \.self) { folder in
-                        let folderNotes = notes(in: folder)
-                        folderHeader(folder)
-                        ForEach(dateGroups(for: folderNotes), id: \.0) { dateTitle, dateNotes in
-                            let groupKey = "\(folder)|\(dateTitle)"
-                            let isExpanded = expandedDateGroups.contains(groupKey)
-                            let displayedNotes = isExpanded ? dateNotes : Array(dateNotes.prefix(5))
-                            Text(dateTitle)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.leading, 22)
-                                .padding(.top, 8)
-                            ForEach(displayedNotes) { note in
-                                noteRow(note)
-                                    .padding(.leading, 22)
-                            }
-                            if dateNotes.count > 5 {
-                                Button(isExpanded ? "Show less" : "Show more") {
-                                    if isExpanded {
-                                        expandedDateGroups.remove(groupKey)
-                                    } else {
-                                        expandedDateGroups.insert(groupKey)
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                                .foregroundStyle(.secondary)
-                                .padding(.leading, 22)
-                                .padding(.vertical, 4)
-                            }
-                        }
-                        .onDrop(of: [UTType.text.identifier], isTargeted: nil) { providers in
-                            moveDroppedNote(from: providers, to: folder)
-                        }
+                        folderRows(folder)
                     }
                 } header: {
                     HStack {
@@ -546,6 +515,48 @@ struct NotesView: View {
                 showDeleteConfirmation = true
             } label: {
                 Label("Delete note", systemImage: "trash")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func folderRows(_ folder: String) -> some View {
+        let folderNotes = notes(in: folder)
+        let isExpanded = expandedFolders.contains(folder)
+        let displayedFolderNotes = isExpanded ? folderNotes : Array(folderNotes.prefix(5))
+        Group {
+            folderHeader(folder)
+            dateGroupRows(folder: folder, folderNotes: displayedFolderNotes)
+            if folderNotes.count > 5 {
+                Button(isExpanded ? "Show less" : "Show more") {
+                    if isExpanded {
+                        expandedFolders.remove(folder)
+                    } else {
+                        expandedFolders.insert(folder)
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 22)
+                .padding(.vertical, 4)
+            }
+        }
+        .onDrop(of: [UTType.text.identifier], isTargeted: nil) { providers in
+            moveDroppedNote(from: providers, to: folder)
+        }
+    }
+
+    @ViewBuilder
+    private func dateGroupRows(folder: String, folderNotes: [MarkdownNote]) -> some View {
+        ForEach(dateGroups(for: folderNotes), id: \.0) { dateTitle, dateNotes in
+            Text(dateTitle)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 22)
+                .padding(.top, 8)
+            ForEach(dateNotes) { note in
+                noteRow(note)
+                    .padding(.leading, 22)
             }
         }
     }
