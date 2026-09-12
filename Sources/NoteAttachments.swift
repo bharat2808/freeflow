@@ -238,11 +238,27 @@ private final class FocusToggleVideoPlayerView: AVPlayerView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        if isDocumentFocused {
-            super.scrollWheel(with: event)
-        } else {
+        guard isDocumentFocused else {
             forwardScrollWheelToAncestor(event)
+            return
         }
+        if let scrollView = internalScrollView(in: self) {
+            scrollView.scrollWheel(with: event)
+        } else {
+            super.scrollWheel(with: event)
+        }
+    }
+
+    private func internalScrollView(in view: NSView) -> NSScrollView? {
+        for child in view.subviews {
+            if let scrollView = child as? NSScrollView {
+                return scrollView
+            }
+            if let scrollView = internalScrollView(in: child) {
+                return scrollView
+            }
+        }
+        return nil
     }
 }
 
