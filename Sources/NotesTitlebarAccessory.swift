@@ -6,7 +6,7 @@ final class NotesSearchState: ObservableObject {
 }
 
 final class NotesTitlebarAccessoryViewController: NSTitlebarAccessoryViewController {
-    static let accessorySize = NSSize(width: 360, height: 32)
+    static let accessorySize = NSSize(width: 376, height: 40)
 
     private let searchState: NotesSearchState
     private let library: NotesLibrary
@@ -48,12 +48,13 @@ final class NotesTitlebarAccessoryViewController: NSTitlebarAccessoryViewControl
         let container = NSView()
         container.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: container.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
+            stack.centerYAnchor.constraint(equalTo: container.centerYAnchor),
             searchField.widthAnchor.constraint(equalToConstant: 320),
-            moreButton.widthAnchor.constraint(equalToConstant: 32)
+            searchField.heightAnchor.constraint(equalToConstant: 30),
+            moreButton.widthAnchor.constraint(equalToConstant: 32),
+            moreButton.heightAnchor.constraint(equalToConstant: 32)
         ])
         view = container
         preferredContentSize = Self.accessorySize
