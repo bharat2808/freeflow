@@ -50,8 +50,10 @@ extension AppState {
         )
         let service = RealtimeTranscriptionService(config: config)
         service.onPartialUpdate = { [weak self] text in
-            guard let self else { return }
-            self.liveNoteTranscript = text
+            DispatchQueue.main.async {
+                guard let self, self.isRecording else { return }
+                self.liveNoteTranscript = text
+            }
         }
         do {
             try service.start()
