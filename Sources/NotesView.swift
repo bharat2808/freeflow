@@ -11,6 +11,8 @@ final class NotesLibrary: ObservableObject {
     private let store = MarkdownNoteStore.standard
     private let saveQueue = DispatchQueue(label: "freeflow.notes.save", qos: .utility)
     private var pendingSaveWorkItems: [UUID: DispatchWorkItem] = [:]
+    private var editUndoBaselines: [UUID: MarkdownNote] = [:]
+    private var undoStack: [UUID: [MarkdownNote]] = [:]
 
     init() { reload() }
 
@@ -54,6 +56,9 @@ final class NotesLibrary: ObservableObject {
 
     func edit(id: UUID, markdown: String) {
         guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
+        if editUndoBaselines[id] == nil {
+            editUndoBaselines[id] = notes[index]
+        }
         notes[index].markdown = markdown
         notes[index].modified = Date()
         let note = notes[index]
@@ -66,6 +71,7 @@ final class NotesLibrary: ObservableObject {
                 DispatchQueue.main.async {
                     guard let self, self.pendingSaveWorkItems[id] === workItem else { return }
                     self.pendingSaveWorkItems[id] = nil
+                    self.commitPendingEditHistory(for: id)
                     self.error = nil
                 }
             } catch {
@@ -103,6 +109,8 @@ final class NotesLibrary: ObservableObject {
     @discardableResult
     func update(id: UUID, markdown: String) -> Bool {
         guard let index = notes.firstIndex(where: { $0.id == id }) else { return false }
+        commitPendingEditHistory(for: id)
+        undoStack[id, default: []].append(notes[index])
         let updated = MarkdownNote(
             id: id,
             markdown: markdown,
@@ -119,6 +127,38 @@ final class NotesLibrary: ObservableObject {
             self.error = "Could not update note: \(error.localizedDescription)"
             return false
         }
+    }
+
+    var canUndoSelectedNote: Bool {
+        guard let selectedID else { return false }
+        return editUndoBaselines[selectedID] != nil || !(undoStack[selectedID]?.isEmpty ?? true)
+    }
+
+    @discardableResult
+    func undoSelectedNote() -> Bool {
+        guard let selectedID,
+              let index = notes.firstIndex(where: { $0.id == selectedID }) else { return false }
+        pendingSaveWorkItems[selectedID]?.cancel()
+        pendingSaveWorkItems[selectedID] = nil
+        commitPendingEditHistory(for: selectedID)
+        guard let previous = undoStack[selectedID]?.popLast() else { return false }
+        do {
+            try store.save(previous)
+            notes[index] = previous
+            error = nil
+            return true
+        } catch let undoError {
+            undoStack[selectedID, default: []].append(previous)
+            error = "Could not undo note: \(undoError.localizedDescription)"
+            return false
+        }
+    }
+
+    private func commitPendingEditHistory(for id: UUID) {
+        guard let baseline = editUndoBaselines.removeValue(forKey: id),
+              let current = notes.first(where: { $0.id == id }),
+              baseline != current else { return }
+        undoStack[id, default: []].append(baseline)
     }
 
     var folders: [String] {
@@ -481,6 +521,37 @@ struct NotesView: View {
             .padding(24)
             .frame(width: 420)
         }
+        .sheet(item: $appState.pendingNoteUpdate) { proposal in
+            VStack(alignment: .leading, spacing: 14) {
+                Text(proposal.action == .append ? "Preview appended note" : "Preview updated note")
+                    .font(.title2.weight(.semibold))
+                Text("Review the complete Markdown result before applying it to the note.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ScrollView {
+                    if let note = library.notes.first(where: { $0.id == proposal.noteID }) {
+                        Markdown(proposal.markdown, baseURL: MarkdownNoteStore.standard.noteFolderURL(for: note))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(14)
+                    } else {
+                        Text(proposal.markdown)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(14)
+                    }
+                }
+                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                .frame(minHeight: 320, maxHeight: 620)
+                HStack {
+                    Spacer()
+                    Button("Cancel") { appState.cancelPendingNoteUpdate() }
+                    Button("Apply update") { appState.confirmPendingNoteUpdate() }
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(24)
+            .frame(width: 720, height: 620)
+        }
         .frame(minWidth: 800, minHeight: 520)
     }
 
@@ -534,6 +605,13 @@ struct NotesView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 12)
+            Button {
+                library.undoSelectedNote()
+            } label: {
+                Label("Undo", systemImage: "arrow.uturn.backward")
+            }
+            .disabled(!library.canUndoSelectedNote)
+            .help("Undo the last note edit")
             Button {
                 appState.startNoteUpdate(noteID: note.id)
             } label: {

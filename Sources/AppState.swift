@@ -148,6 +148,13 @@ enum NoteVoiceAction: Sendable, Equatable {
     case append
 }
 
+struct PendingNoteUpdate: Identifiable {
+    let id = UUID()
+    let noteID: UUID
+    let action: NoteVoiceAction
+    let markdown: String
+}
+
 private enum CommandInvocation: String {
     case automatic
     case manual
@@ -637,6 +644,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     @Published var liveNoteTranscript: String = ""
     @Published var noteUpdateTargetID: UUID?
     @Published var noteVoiceAction: NoteVoiceAction?
+    @Published var pendingNoteUpdate: PendingNoteUpdate?
     @Published var hasScreenRecordingPermission = false
     @Published var launchAtLogin: Bool {
         didSet { setLaunchAtLogin(launchAtLogin) }
@@ -1911,6 +1919,25 @@ final class AppState: ObservableObject, @unchecked Sendable {
         liveNoteTranscript = ""
         pendingNoteRecording = true
         toggleRecording()
+    }
+
+    func confirmPendingNoteUpdate() {
+        guard let pendingNoteUpdate else { return }
+        let saved = notesLibrary.update(id: pendingNoteUpdate.noteID, markdown: pendingNoteUpdate.markdown)
+        statusText = saved ? "Note updated" : "Note could not be updated"
+        self.pendingNoteUpdate = nil
+        noteUpdateTargetID = nil
+        noteVoiceAction = nil
+        if saved {
+            NotificationCenter.default.post(name: .showNotes, object: nil)
+        }
+    }
+
+    func cancelPendingNoteUpdate() {
+        pendingNoteUpdate = nil
+        noteUpdateTargetID = nil
+        noteVoiceAction = nil
+        statusText = "Update cancelled"
     }
 
     private func handleOverlayStopButtonPressed() {
@@ -3337,12 +3364,14 @@ final class AppState: ObservableObject, @unchecked Sendable {
                                 self.overlayManager.dismiss()
                             }
                         } else if let noteUpdateTarget {
-                            let updateFailed = result.outcome.usedRawTranscriptFallback
-                            let saved = !updateFailed && self.notesLibrary.update(id: noteUpdateTarget.id, markdown: trimmedFinalTranscript)
-                            self.statusText = saved ? "Note updated" : "Note could not be updated"
+                            self.pendingNoteUpdate = PendingNoteUpdate(
+                                noteID: noteUpdateTarget.id,
+                                action: self.noteVoiceAction ?? .update,
+                                markdown: trimmedFinalTranscript
+                            )
+                            self.statusText = "Preview ready"
                             self.noteUpdateTargetID = nil
                             self.noteVoiceAction = nil
-                            NotificationCenter.default.post(name: .showNotes, object: nil)
                         } else if shouldSaveAsNote {
                             let saved = self.notesLibrary.create(trimmedFinalTranscript)
                             self.statusText = saved ? completionStatusText : saveFailureStatusText
@@ -3367,7 +3396,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                         self.audioRecorder.cleanup()
                         self.refreshAvailableMicrophonesIfNeeded()
 
-                        self.scheduleReadyStatusReset(after: 3, matching: [completionStatusText, "Nothing to transcribe", saveFailureStatusText, "Note updated", "Note could not be updated"])
+                        self.scheduleReadyStatusReset(after: 3, matching: [completionStatusText, "Nothing to transcribe", saveFailureStatusText, "Note updated", "Note could not be updated", "Preview ready"])
                     }
                 } catch is CancellationError {
                     await MainActor.run {
