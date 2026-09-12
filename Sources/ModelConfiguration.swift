@@ -75,17 +75,6 @@ public struct ModelConfiguration {
                 includeReasoning: false,
                 shouldStripThinkTags: true
             )
-        } else if cleanModel.hasPrefix("deepseek/") {
-            // DeepSeek reasoning models otherwise spend their completion budget
-            // on hidden reasoning before returning note content. Post-processing
-            // needs a deterministic rewrite, so disable reasoning while leaving
-            // the provider free to choose the completion length.
-            return ModelConfig(
-                maxCompletionTokens: nil,
-                reasoningEffort: "none",
-                includeReasoning: false,
-                shouldStripThinkTags: true
-            )
         } else if cleanModel == "llama-3.1-8b-instant" {
             return ModelConfig(
                 maxCompletionTokens: nil,

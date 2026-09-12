@@ -28,12 +28,6 @@ enum ModelConfigurationTests {
         TestSupport.expectEqual(qwen.includeReasoning, false)
         TestSupport.expectEqual(qwen.shouldStripThinkTags, true)
 
-        let deepSeek = ModelConfiguration.config(for: "deepseek/deepseek-v4.1-flash")
-        TestSupport.expectEqual(deepSeek.maxCompletionTokens, nil)
-        TestSupport.expectEqual(deepSeek.reasoningEffort, "none")
-        TestSupport.expectEqual(deepSeek.includeReasoning, false)
-        TestSupport.expectEqual(deepSeek.shouldStripThinkTags, true)
-
         let unknown = ModelConfiguration.config(for: "example/unknown-model")
         TestSupport.expectEqual(unknown.maxCompletionTokens, nil)
         TestSupport.expectEqual(unknown.reasoningEffort, nil)

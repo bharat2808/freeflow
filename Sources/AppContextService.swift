@@ -1,9 +1,6 @@
 import Foundation
 import ApplicationServices
 import AppKit
-import os.log
-
-private let contextLog = OSLog(subsystem: "com.zachlatta.freeflow", category: "Context")
 
 struct AppSelectionSnapshot {
     let appName: String?
@@ -95,16 +92,6 @@ Return only two sentences, no labels, no markdown, no extra commentary.
     }
 
     func collectContext() async -> AppContext {
-        let startedAt = CFAbsoluteTimeGetCurrent()
-        defer {
-            os_log(
-                .info,
-                log: contextLog,
-                "context capture finished elapsed=%.0fms model=%{public}@",
-                (CFAbsoluteTimeGetCurrent() - startedAt) * 1000,
-                contextModel
-            )
-        }
         let contextSystemPrompt = resolveContextPrompt()
 
         guard let frontmostApp = NSWorkspace.shared.frontmostApplication else {
@@ -227,19 +214,6 @@ Return only two sentences, no labels, no markdown, no extra commentary.
         contextSystemPrompt: String,
         model: String
     ) async -> (activity: String, prompt: String)? {
-        let startedAt = CFAbsoluteTimeGetCurrent()
-        var responseStatus = 0
-        defer {
-            os_log(
-                .info,
-                log: contextLog,
-                "context LLM request finished model=%{public}@ status=%d elapsed=%.0fms screenshot=%{public}@",
-                model,
-                responseStatus,
-                (CFAbsoluteTimeGetCurrent() - startedAt) * 1000,
-                screenshotDataURL == nil ? "no" : "yes"
-            )
-        }
         do {
             var request = URLRequest(url: URL(string: "\(baseURL)/chat/completions")!)
             request.httpMethod = "POST"
@@ -280,7 +254,7 @@ Selected text: \(selectedText ?? "None")
 
             let fullPrompt = "Model: \(model)\n\n[System]\n\(contextSystemPrompt)\n[User]\n\(userMessageDescription)"
 
-            var payload: [String: Any] = [
+            let payload: [String: Any] = [
                 "model": model,
                 "temperature": 0.2,
                 "messages": [
@@ -288,26 +262,11 @@ Selected text: \(selectedText ?? "None")
                     ["role": "user", "content": userMessage]
                 ]
             ]
-            // Apply the same provider-specific reasoning controls used by note
-            // post-processing. Without these fields, reasoning-capable context
-            // models can spend the entire request thinking before returning the
-            // two-sentence summary, which makes stopping a recording appear hung.
-            let config = ModelConfiguration.config(for: model)
-            if Self.supportsReasoningControls(baseURL: baseURL) {
-                if let effort = config.reasoningEffort {
-                    payload["reasoning_effort"] = effort
-                }
-                if let include = config.includeReasoning {
-                    payload["include_reasoning"] = include
-                }
-            }
-
             request.httpBody = try JSONSerialization.data(withJSONObject: payload, options: [])
             let (data, response) = try await LLMAPITransport.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
                 return nil
             }
-            responseStatus = httpResponse.statusCode
             guard httpResponse.statusCode == 200 else {
                 return nil
             }
@@ -335,13 +294,6 @@ Selected text: \(selectedText ?? "None")
         let cleaned = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return nil }
         return normalizedActivitySummary(cleaned)
-    }
-
-    private static func supportsReasoningControls(baseURL: String) -> Bool {
-        guard let host = URL(string: baseURL)?.host?.lowercased() else { return false }
-        return host == "api.groq.com"
-            || host == "openrouter.ai"
-            || host.hasSuffix(".openrouter.ai")
     }
 
     private static func normalizedActivitySummary(_ value: String) -> String {
