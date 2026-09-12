@@ -243,7 +243,19 @@ private final class FocusToggleVideoPlayerView: AVPlayerView {
             return
         }
         if let scrollView = internalScrollView(in: self) {
-            scrollView.scrollWheel(with: event)
+            let clipView = scrollView.contentView
+            var origin = clipView.bounds.origin
+            origin.x -= event.scrollingDeltaX
+            origin.y += event.scrollingDeltaY
+
+            let documentSize = scrollView.documentView?.frame.size ?? .zero
+            let visibleSize = clipView.bounds.size
+            let maximumX = max(0, documentSize.width - visibleSize.width)
+            let maximumY = max(0, documentSize.height - visibleSize.height)
+            origin.x = min(max(0, origin.x), maximumX)
+            origin.y = min(max(0, origin.y), maximumY)
+            clipView.setBoundsOrigin(origin)
+            scrollView.reflectScrolledClipView(clipView)
         } else {
             super.scrollWheel(with: event)
         }
