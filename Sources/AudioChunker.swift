@@ -12,7 +12,9 @@ struct AudioChunkSet {
 }
 
 enum AudioChunker {
-    static let defaultChunkDuration: TimeInterval = 90
+    /// Three-minute chunks reduce boundary seams while staying comfortably
+    /// below the local transcription timeout and memory budget.
+    static let defaultChunkDuration: TimeInterval = 180
     static let defaultOverlapDuration: TimeInterval = 0.5
 
     static func split(
