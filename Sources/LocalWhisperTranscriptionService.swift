@@ -141,6 +141,76 @@ enum LocalWhisperError: LocalizedError {
     }
 }
 
+@_silgen_name("ff_whisper_create")
+private func ffWhisperCreate(_ modelPath: UnsafePointer<CChar>, _ language: UnsafePointer<CChar>?) -> UnsafeMutableRawPointer?
+
+@_silgen_name("ff_whisper_transcribe")
+private func ffWhisperTranscribe(
+    _ session: UnsafeMutableRawPointer,
+    _ samples: UnsafePointer<Float>,
+    _ sampleCount: Int32,
+    _ output: UnsafeMutablePointer<CChar>,
+    _ outputCapacity: Int
+) -> Int32
+
+@_silgen_name("ff_whisper_destroy")
+private func ffWhisperDestroy(_ session: UnsafeMutableRawPointer)
+
+private final class InProcessWhisperSession: @unchecked Sendable {
+    private let handle: UnsafeMutableRawPointer
+    private let lock = NSLock()
+
+    init?(modelPath: String, language: String?) {
+        var handle: UnsafeMutableRawPointer?
+        modelPath.withCString { modelCString in
+            if let language {
+                language.withCString { languageCString in
+                    handle = ffWhisperCreate(modelCString, languageCString)
+                }
+            } else {
+                handle = ffWhisperCreate(modelCString, nil)
+            }
+        }
+        guard let handle else { return nil }
+        self.handle = handle
+    }
+
+    deinit {
+        ffWhisperDestroy(handle)
+    }
+
+    func transcribe(pcm16: Data) throws -> String {
+        guard !pcm16.isEmpty else { throw LocalWhisperError.emptyTranscript }
+        var samples = [Float]()
+        samples.reserveCapacity(pcm16.count / MemoryLayout<Int16>.size)
+        pcm16.withUnsafeBytes { rawBuffer in
+            let values = rawBuffer.bindMemory(to: Int16.self)
+            samples.append(contentsOf: values.map { Float($0) / 32768.0 })
+        }
+        guard !samples.isEmpty else { throw LocalWhisperError.emptyTranscript }
+
+        return try lock.withLock {
+            var output = [CChar](repeating: 0, count: 64 * 1024)
+            let result = samples.withUnsafeBufferPointer { buffer in
+                output.withUnsafeMutableBufferPointer { outputBuffer in
+                    ffWhisperTranscribe(
+                        handle,
+                        buffer.baseAddress!,
+                        Int32(buffer.count),
+                        outputBuffer.baseAddress!,
+                        outputBuffer.count
+                    )
+                }
+            }
+            guard result >= 0 else { throw LocalWhisperError.processFailed(-1, "In-process Whisper failed.") }
+            let transcript = String(cString: output)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !transcript.isEmpty else { throw LocalWhisperError.emptyTranscript }
+            return transcript
+        }
+    }
+}
+
 final class LocalWhisperTranscriptionService: AudioTranscriber {
     private final class ProcessBox: @unchecked Sendable {
         private let lock = NSLock()
@@ -165,6 +235,7 @@ final class LocalWhisperTranscriptionService: AudioTranscriber {
     private let modelURL: URL
     private let language: String?
     private let timeoutSeconds: TimeInterval
+    private let inProcessSession: InProcessWhisperSession?
 
     init(
         executablePath: String,
@@ -187,6 +258,10 @@ final class LocalWhisperTranscriptionService: AudioTranscriber {
         let trimmedLanguage = language?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.language = (trimmedLanguage?.isEmpty == false) ? trimmedLanguage : nil
         self.timeoutSeconds = max(1, timeoutSeconds)
+        self.inProcessSession = InProcessWhisperSession(
+            modelPath: model.path,
+            language: self.language
+        )
     }
 
     func transcribe(fileURL: URL) async throws -> String {
@@ -226,6 +301,9 @@ final class LocalWhisperTranscriptionService: AudioTranscriber {
     /// in a minimal WAV container before invoking whisper-cli.
     func transcribePCM16(_ samples: Data, sampleRate: Int = 24_000) async throws -> String {
         guard !samples.isEmpty else { throw LocalWhisperError.emptyTranscript }
+        if sampleRate == 24_000, let inProcessSession {
+            return try inProcessSession.transcribe(pcm16: samples)
+        }
         let temporaryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("freeflow-whisper-preview-\(UUID().uuidString).wav")
         try Self.makeWAVData(pcm16: samples, sampleRate: sampleRate).write(to: temporaryURL, options: .atomic)
@@ -429,18 +507,23 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
 
     private func process(_ snapshot: Data) async {
         do {
-            let transcript = try await transcriber.transcribePCM16(snapshot, sampleRate: sampleRate)
-            try Task.checkCancellation()
-            if !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                let committed: String = stateLock.withLock {
-                    if committedTranscript.isEmpty {
-                        committedTranscript = transcript
-                    } else {
-                        committedTranscript += " " + transcript
+            // Avoid invoking Whisper for clearly silent chunks.  This keeps
+            // long recordings inexpensive while preserving the recorder's
+            // complete audio for final transcription.
+            if containsSpeech(snapshot) {
+                let transcript = try await transcriber.transcribePCM16(snapshot, sampleRate: sampleRate)
+                try Task.checkCancellation()
+                if !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    let committed: String = stateLock.withLock {
+                        if committedTranscript.isEmpty {
+                            committedTranscript = transcript
+                        } else {
+                            committedTranscript += " " + transcript
+                        }
+                        return committedTranscript
                     }
-                    return committedTranscript
+                    onUpdate(committed)
                 }
-                onUpdate(committed)
             }
         } catch is CancellationError {
             // Recording cancellation is expected and should not surface as an error.
@@ -466,5 +549,19 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
                 await self?.process(nextSnapshot)
             }
         }
+    }
+
+    private func containsSpeech(_ samples: Data) -> Bool {
+        let values = samples.withUnsafeBytes { $0.bindMemory(to: Int16.self) }
+        guard !values.isEmpty else { return false }
+        var sumOfSquares = 0.0
+        var peak = 0.0
+        for value in values {
+            let normalized = abs(Double(value)) / 32768.0
+            sumOfSquares += normalized * normalized
+            peak = max(peak, normalized)
+        }
+        let rms = sqrt(sumOfSquares / Double(values.count))
+        return rms >= 0.008 || peak >= 0.04
     }
 }

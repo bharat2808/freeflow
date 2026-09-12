@@ -12,6 +12,7 @@ APP_EXECUTABLE_TARGET := $(subst $(space),\ ,$(APP_EXECUTABLE))
 
 SOURCES = $(shell find Sources -name '*.swift' -type f | LC_ALL=C sort)
 TEST_RUNNER = $(BUILD_DIR)/FreeFlowTests
+WHISPER_BRIDGE_OBJECT = $(BUILD_DIR)/WhisperBridge.o
 TEST_PRODUCTION_SOURCES = \
 	Sources/MarkdownNoteStore.swift \
 	Sources/LocalWhisperTranscriptionService.swift \
@@ -48,7 +49,7 @@ endif
 
 all: $(APP_EXECUTABLE_TARGET)
 
-$(APP_EXECUTABLE_TARGET): $(SOURCES) Info.plist $(ICON_ICNS)
+$(APP_EXECUTABLE_TARGET): $(SOURCES) $(WHISPER_BRIDGE_OBJECT) Info.plist $(ICON_ICNS)
 	@mkdir -p "$(MACOS_DIR)" "$(RESOURCES)"
 ifeq ($(ARCH),universal)
 	swiftc \
@@ -62,7 +63,7 @@ ifeq ($(ARCH),universal)
 		-o "$(MACOS_DIR)/$(APP_NAME)-x86_64" \
 		-sdk $(shell xcrun --show-sdk-path) \
 		-target x86_64-apple-macosx13.0 \
-		$(SOURCES)
+		$(SOURCES) $(WHISPER_BRIDGE_OBJECT)
 	lipo -create -output "$(MACOS_DIR)/$(APP_NAME)" \
 		"$(MACOS_DIR)/$(APP_NAME)-arm64" \
 		"$(MACOS_DIR)/$(APP_NAME)-x86_64"
@@ -73,7 +74,7 @@ else
 		-o "$(MACOS_DIR)/$(APP_NAME)" \
 		-sdk $(shell xcrun --show-sdk-path) \
 		-target $(ARCH)-apple-macosx13.0 \
-		$(SOURCES)
+		$(SOURCES) $(WHISPER_BRIDGE_OBJECT)
 endif
 	@cp Info.plist "$(CONTENTS)/"
 	@plutil -replace CFBundleName -string "$(APP_NAME)" "$(CONTENTS)/Info.plist"
@@ -98,7 +99,7 @@ typecheck:
 		-target $(ARCH)-apple-macosx13.0 \
 		$(SOURCES)
 
-test:
+test: $(WHISPER_BRIDGE_OBJECT)
 	@mkdir -p "$(BUILD_DIR)"
 	swiftc \
 		-parse-as-library \
@@ -106,9 +107,26 @@ test:
 		-o "$(TEST_RUNNER)" \
 		-sdk $(shell xcrun --show-sdk-path) \
 		-target $(ARCH)-apple-macosx13.0 \
-		$(TEST_PRODUCTION_SOURCES) \
+		$(TEST_PRODUCTION_SOURCES) $(WHISPER_BRIDGE_OBJECT) \
 		$(TEST_SOURCES)
 	@$(TEST_RUNNER)
+
+ifeq ($(ARCH),universal)
+$(WHISPER_BRIDGE_OBJECT): $(BUILD_DIR)/WhisperBridge-arm64.o $(BUILD_DIR)/WhisperBridge-x86_64.o
+	lipo -create -output "$@" $^
+
+$(BUILD_DIR)/WhisperBridge-arm64.o: Sources/WhisperBridge.c
+	@mkdir -p "$(BUILD_DIR)"
+	clang -c "$<" -o "$@" -I/opt/homebrew/include -O2 -mmacosx-version-min=13.0 -arch arm64
+
+$(BUILD_DIR)/WhisperBridge-x86_64.o: Sources/WhisperBridge.c
+	@mkdir -p "$(BUILD_DIR)"
+	clang -c "$<" -o "$@" -I/opt/homebrew/include -O2 -mmacosx-version-min=13.0 -arch x86_64
+else
+$(WHISPER_BRIDGE_OBJECT): Sources/WhisperBridge.c
+	@mkdir -p "$(BUILD_DIR)"
+	clang -c "$<" -o "$@" -I/opt/homebrew/include -O2 -mmacosx-version-min=13.0 -arch $(ARCH)
+endif
 
 validate:
 	plutil -lint Info.plist FreeFlow.entitlements
