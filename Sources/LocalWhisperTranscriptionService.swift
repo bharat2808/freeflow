@@ -1,5 +1,11 @@
 import Foundation
 import os.lock
+import os.log
+
+private let localWhisperLog = OSLog(
+    subsystem: "com.zachlatta.freeflow",
+    category: "LocalWhisperPreview"
+)
 
 enum LocalWhisperModelDownloader {
     static let baseEnglishModelURL = URL(
@@ -235,6 +241,7 @@ final class LocalWhisperTranscriptionService: AudioTranscriber {
     private let modelURL: URL
     private let language: String?
     private let timeoutSeconds: TimeInterval
+    private let inProcessSession: InProcessWhisperSession?
 
     init(
         executablePath: String,
@@ -257,6 +264,10 @@ final class LocalWhisperTranscriptionService: AudioTranscriber {
         let trimmedLanguage = language?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.language = (trimmedLanguage?.isEmpty == false) ? trimmedLanguage : nil
         self.timeoutSeconds = max(1, timeoutSeconds)
+        self.inProcessSession = InProcessWhisperSession(
+            modelPath: model.path,
+            language: self.language
+        )
     }
 
     func transcribe(fileURL: URL) async throws -> String {
@@ -295,15 +306,8 @@ final class LocalWhisperTranscriptionService: AudioTranscriber {
     /// same 16 kHz mono PCM16 used by the saved recording.
     func transcribePCM16(_ samples: Data, sampleRate: Int = 16_000) async throws -> String {
         guard !samples.isEmpty else { throw LocalWhisperError.emptyTranscript }
-        if sampleRate == 16_000,
-           let previewSession = InProcessWhisperSession(
-               modelPath: modelURL.path,
-               language: language
-           ) {
-            // A Whisper context can retain decoder state after whisper_full.
-            // Keep preview chunks isolated so one completed chunk cannot
-            // leave the shared context stalled for every later update.
-            return try previewSession.transcribe(pcm16: samples)
+        if sampleRate == 16_000, let inProcessSession {
+            return try inProcessSession.transcribe(pcm16: samples)
         }
         let temporaryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("freeflow-whisper-preview-\(UUID().uuidString).wav")
@@ -547,6 +551,7 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
     }
 
     private func process(_ snapshot: PreviewSnapshot) async {
+        let startedAt = CFAbsoluteTimeGetCurrent()
         do {
             // Avoid invoking Whisper for clearly silent chunks.  This keeps
             // long recordings inexpensive while preserving the recorder's
@@ -560,6 +565,13 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
                     // from the prior result. Replacing the provisional preview
                     // avoids duplicating those revised overlapping passages.
                     onUpdate(preview)
+                    os_log(
+                        .info,
+                        log: localWhisperLog,
+                        "preview updated audio=%.1fs elapsed=%.0fms",
+                        Double(snapshot.audio.count) / Double(sampleRate * MemoryLayout<Int16>.size),
+                        (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+                    )
                 }
             }
         } catch is CancellationError {
@@ -567,6 +579,13 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
         } catch {
             // Preview failures are non-fatal; the final stop-time transcription
             // still reports actionable errors to the user.
+            os_log(
+                .error,
+                log: localWhisperLog,
+                "preview failed after %.0fms: %{public}@",
+                (CFAbsoluteTimeGetCurrent() - startedAt) * 1000,
+                error.localizedDescription
+            )
         }
     }
 
