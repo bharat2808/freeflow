@@ -594,6 +594,13 @@ private final class FocusTogglePDFView: PDFView {
     var isDocumentFocused = false
     var onToggleFocus: (() -> Void)?
 
+    // PDFView contains a private NSScrollView. If hit testing reaches that
+    // child, the child's scrollWheel handler bypasses this focus gate.
+    // Keep the PDFView itself as the event target so focus controls scrolling.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        bounds.contains(point) ? self : super.hitTest(point)
+    }
+
     override func mouseDown(with event: NSEvent) {
         onToggleFocus?()
         isDocumentFocused.toggle()

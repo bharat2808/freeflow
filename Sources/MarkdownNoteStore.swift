@@ -54,7 +54,50 @@ folder name, filename, and extension. Do not convert attachment references to ab
 or shortened filenames. Keep images as ![label](relative/path), and keep document, video, audio, and other
 files as [label](relative/path). Keep each attachment separated from surrounding content by a blank line.
 When adding an attachment, place it on its own line with a blank line before and after it.
+Existing links and attachments may appear as ATTACHMENT_N placeholders. Preserve each placeholder exactly.
+Only remove or convert a placeholder when the spoken instruction explicitly requests that specific change.
 """
+
+    struct ProtectedMarkdownReferences {
+        let markdown: String
+        private let replacements: [(token: String, source: String)]
+
+        init(markdown: String, replacements: [(token: String, source: String)]) {
+            self.markdown = markdown
+            self.replacements = replacements
+        }
+
+        func restore(in generatedMarkdown: String) -> String {
+            replacements.reduce(generatedMarkdown) { result, replacement in
+                result.replacingOccurrences(of: replacement.token, with: replacement.source)
+            }
+        }
+    }
+
+    /// Temporarily replaces Markdown links and images with opaque tokens while
+    /// an LLM edits a note. This prevents Unicode punctuation, line wrapping,
+    /// or filename normalization from corrupting local attachment paths.
+    static func protectMarkdownReferences(_ markdown: String) -> ProtectedMarkdownReferences {
+        let pattern = #"!?\[[^\]\n]*\]\([^\n]*\)"#
+        guard let expression = try? NSRegularExpression(pattern: pattern) else {
+            return ProtectedMarkdownReferences(markdown: markdown, replacements: [])
+        }
+        let range = NSRange(markdown.startIndex..<markdown.endIndex, in: markdown)
+        let matches = expression.matches(in: markdown, range: range)
+        var protectedMarkdown = markdown
+        var replacements: [(token: String, source: String)] = []
+        for (index, match) in matches.reversed().enumerated() {
+            let source = (markdown as NSString).substring(with: match.range)
+            let token = "ATTACHMENT_\(matches.count - index)"
+            protectedMarkdown = (protectedMarkdown as NSString)
+                .replacingCharacters(in: match.range, with: token)
+            replacements.append((token: token, source: source))
+        }
+        return ProtectedMarkdownReferences(
+            markdown: protectedMarkdown,
+            replacements: Array(replacements.reversed())
+        )
+    }
 
     static func splitText(_ text: String, maxCharacters: Int = 12_000) -> [String] {
         let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)

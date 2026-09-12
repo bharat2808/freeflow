@@ -84,5 +84,13 @@ enum MarkdownNoteStoreTests {
             MarkdownNoteStore.mergeTranscripts(["First section", "Second section"]),
             "First section\n\nSecond section"
         )
+        let protected = MarkdownNoteStore.protectMarkdownReferences(
+            "Before\n\n![image](note/image.png)\n\n[site](https://example.com)"
+        )
+        TestSupport.expectEqual(protected.markdown, "Before\n\nATTACHMENT_1\n\nATTACHMENT_2")
+        TestSupport.expectEqual(
+            protected.restore(in: protected.markdown),
+            "Before\n\n![image](note/image.png)\n\n[site](https://example.com)"
+        )
     }
 }
