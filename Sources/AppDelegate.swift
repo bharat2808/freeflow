@@ -95,7 +95,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let titlebarAccessory = NotesTitlebarAccessoryViewController(library: appState.notesLibrary, searchState: notesSearchState)
             titlebarAccessory.layoutAttribute = .right
             window.addTitlebarAccessoryViewController(titlebarAccessory)
-            titlebarAccessory.view.setFrameSize(NSSize(width: 296, height: 28))
+            titlebarAccessory.view.setFrameSize(NotesTitlebarAccessoryViewController.accessorySize)
             window.isReleasedWhenClosed = false
             window.center()
             notesWindow = window
