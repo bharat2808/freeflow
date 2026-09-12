@@ -162,12 +162,7 @@ private struct NoteAttachmentView: View {
         case let .text(label, url):
             TextAttachmentView(label: label, url: url)
         case let .pdf(label, url):
-            VStack(alignment: .leading, spacing: 8) {
-                AttachmentHeader(label: label, icon: "doc.richtext", url: url)
-                PDFKitView(url: url)
-                    .frame(maxWidth: .infinity, minHeight: 420, maxHeight: 800)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-            }
+            FocusablePDFAttachmentView(label: label, url: url)
         case let .file(label, url):
             GenericAttachmentView(label: label, url: url)
         }
@@ -201,6 +196,7 @@ private struct NativeVideoView: NSViewRepresentable {
 private struct TextAttachmentView: View {
     let label: String
     let url: URL
+    @State private var isFocused = false
 
     var body: some View {
         if ["html", "htm"].contains(url.pathExtension.lowercased()) {
@@ -222,8 +218,13 @@ private struct TextAttachmentView: View {
                         .padding(12)
                 }
                 .frame(maxWidth: .infinity, minHeight: 420, maxHeight: 800)
-                .focusable(true)
+                .scrollDisabled(!isFocused)
+                .onTapGesture { isFocused.toggle() }
                 .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(isFocused ? Color.accentColor : Color.clear, lineWidth: 1)
+                }
             } else {
                 Text("This text file could not be decoded as UTF-8.")
                     .foregroundStyle(.secondary)
@@ -235,16 +236,17 @@ private struct TextAttachmentView: View {
 private struct HTMLAttachmentView: View {
     let label: String
     let url: URL
+    @State private var isFocused = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             AttachmentHeader(label: label, icon: "globe", url: url)
-            HTMLWebView(url: url)
+            HTMLWebView(url: url, isFocused: $isFocused)
                 .frame(maxWidth: .infinity, minHeight: 520, maxHeight: 900)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay {
                     RoundedRectangle(cornerRadius: 8)
-                        .stroke(.quaternary, lineWidth: 1)
+                        .stroke(isFocused ? Color.accentColor : Color.secondary.opacity(0.25), lineWidth: 1)
                 }
         }
     }
@@ -252,17 +254,37 @@ private struct HTMLAttachmentView: View {
 
 private struct HTMLWebView: NSViewRepresentable {
     let url: URL
+    @Binding var isFocused: Bool
 
-    func makeNSView(context: Context) -> WKWebView {
-        let webView = WKWebView(frame: .zero)
+    func makeNSView(context: Context) -> FocusToggleWebView {
+        let webView = FocusToggleWebView(frame: .zero)
+        webView.onToggleFocus = { isFocused.toggle() }
+        webView.isDocumentFocused = isFocused
         webView.allowsMagnification = true
         webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
         return webView
     }
 
-    func updateNSView(_ nsView: WKWebView, context: Context) {
+    func updateNSView(_ nsView: FocusToggleWebView, context: Context) {
+        nsView.isDocumentFocused = isFocused
         guard nsView.url?.standardizedFileURL != url.standardizedFileURL else { return }
         nsView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+    }
+}
+
+private final class FocusToggleWebView: WKWebView {
+    var isDocumentFocused = false
+    var onToggleFocus: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        onToggleFocus?()
+        isDocumentFocused.toggle()
+        super.mouseDown(with: event)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        guard isDocumentFocused else { return }
+        super.scrollWheel(with: event)
     }
 }
 
@@ -288,18 +310,58 @@ private struct AttachmentHeader: View {
     }
 }
 
+private struct FocusablePDFAttachmentView: View {
+    let label: String
+    let url: URL
+    @State private var isFocused = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            AttachmentHeader(label: label, icon: "doc.richtext", url: url)
+            PDFKitView(url: url, isFocused: $isFocused)
+                .frame(maxWidth: .infinity, minHeight: 420, maxHeight: 800)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(isFocused ? Color.accentColor : Color.secondary.opacity(0.25), lineWidth: 1)
+                }
+        }
+    }
+}
+
 private struct PDFKitView: NSViewRepresentable {
     let url: URL
+    @Binding var isFocused: Bool
 
-    func makeNSView(context: Context) -> PDFView {
-        let view = PDFView()
+    func makeNSView(context: Context) -> FocusTogglePDFView {
+        let view = FocusTogglePDFView()
+        view.onToggleFocus = { isFocused.toggle() }
+        view.isDocumentFocused = isFocused
         view.autoScales = true
         view.displayMode = .singlePageContinuous
         view.document = PDFDocument(url: url)
         return view
     }
 
-    func updateNSView(_ nsView: PDFView, context: Context) {}
+    func updateNSView(_ nsView: FocusTogglePDFView, context: Context) {
+        nsView.isDocumentFocused = isFocused
+    }
+}
+
+private final class FocusTogglePDFView: PDFView {
+    var isDocumentFocused = false
+    var onToggleFocus: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        onToggleFocus?()
+        isDocumentFocused.toggle()
+        super.mouseDown(with: event)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        guard isDocumentFocused else { return }
+        super.scrollWheel(with: event)
+    }
 }
 
 private struct GenericAttachmentView: View {
