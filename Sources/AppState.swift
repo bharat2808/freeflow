@@ -305,6 +305,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     static let defaultPostProcessingFallbackModel = "qwen/qwen3.6-27b"
     static let defaultContextModel = "qwen/qwen3.6-27b"
     static let noteProcessingTimeoutSeconds: TimeInterval = 120
+    static let notePreviewTimeoutSeconds: TimeInterval = 20
     static var noteProcessingOverallTimeoutSeconds: TimeInterval {
         let override = UserDefaults.standard.double(forKey: "note_processing_total_timeout_seconds")
         return override > 0 ? override : 90
@@ -3483,7 +3484,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     executablePath: localWhisperExecutablePath,
                     modelPath: localWhisperModelPath,
                     language: resolvedTranscriptionLanguage,
-                    timeoutSeconds: Self.noteProcessingTimeoutSeconds
+                    timeoutSeconds: Self.notePreviewTimeoutSeconds
                 )
                 let preview = service.makeLivePreviewSession { [weak self] text in
                     DispatchQueue.main.async {

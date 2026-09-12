@@ -381,8 +381,11 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
     private var workerTask: Task<Void, Never>?
 
     private let sampleRate = 24_000
-    private let processEveryFrames = 24_000 * 3
-    private let maxPreviewFrames = 24_000 * 45
+    // Preview inference must stay close to real time.  The final note is
+    // transcribed separately after recording stops, so preview can use a
+    // short rolling window instead of repeatedly replaying 45 seconds.
+    private let processEveryFrames = 24_000 * 2
+    private let maxPreviewFrames = 24_000 * 12
 
     init(
         transcriber: LocalWhisperTranscriptionService,
