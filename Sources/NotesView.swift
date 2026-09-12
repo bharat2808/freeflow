@@ -394,28 +394,32 @@ struct NotesView: View {
                     .padding(.top, 12)
                 }
                 if let note = library.notes.first(where: { $0.id == library.selectedID }) {
-                    noteHeader(note)
-                    if preview {
-                        ScrollView {
-                            NoteMarkdownPreview(markdown: note.markdown, note: note)
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(28)
-                        }
+                    if let proposal = appState.pendingNoteUpdate, proposal.noteID == note.id {
+                        noteUpdatePreview(proposal, note: note)
                     } else {
-                        MarkdownNoteEditor(text: Binding(get: {
-                            library.notes.first(where: { $0.id == note.id })?.markdown ?? ""
-                        }, set: { library.edit(id: note.id, markdown: $0) })) { payload in
-                            library.importAttachment(payload, for: note.id).map { path in
-                                switch payload.kind {
-                                case .image:
-                                    return "\n\n![\(payload.fileName)](\(path))\n\n"
-                                case .video, .audio, .text, .pdf, .file:
-                                    return "\n\n[\(payload.fileName)](\(path))\n\n"
+                        noteHeader(note)
+                        if preview {
+                            ScrollView {
+                                NoteMarkdownPreview(markdown: note.markdown, note: note)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(28)
+                            }
+                        } else {
+                            MarkdownNoteEditor(text: Binding(get: {
+                                library.notes.first(where: { $0.id == note.id })?.markdown ?? ""
+                            }, set: { library.edit(id: note.id, markdown: $0) })) { payload in
+                                library.importAttachment(payload, for: note.id).map { path in
+                                    switch payload.kind {
+                                    case .image:
+                                        return "\n\n![\(payload.fileName)](\(path))\n\n"
+                                    case .video, .audio, .text, .pdf, .file:
+                                        return "\n\n[\(payload.fileName)](\(path))\n\n"
+                                    }
                                 }
                             }
+                            .padding(18)
                         }
-                        .padding(18)
                     }
                 } else {
                     VStack(spacing: 14) {
@@ -521,38 +525,34 @@ struct NotesView: View {
             .padding(24)
             .frame(width: 420)
         }
-        .sheet(item: $appState.pendingNoteUpdate) { proposal in
-            VStack(alignment: .leading, spacing: 14) {
-                Text(proposal.action == .append ? "Preview appended note" : "Preview updated note")
-                    .font(.title2.weight(.semibold))
-                Text("Review the complete Markdown result before applying it to the note.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                ScrollView {
-                    if let note = library.notes.first(where: { $0.id == proposal.noteID }) {
-                        Markdown(proposal.markdown, baseURL: MarkdownNoteStore.standard.noteFolderURL(for: note))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(14)
-                    } else {
-                        Text(proposal.markdown)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(14)
-                    }
-                }
-                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
-                .frame(minHeight: 320, maxHeight: 620)
-                HStack {
-                    Spacer()
-                    Button("Cancel") { appState.cancelPendingNoteUpdate() }
-                    Button("Apply update") { appState.confirmPendingNoteUpdate() }
-                        .buttonStyle(.borderedProminent)
-                        .keyboardShortcut(.defaultAction)
-                }
-            }
-            .padding(24)
-            .frame(width: 720, height: 620)
-        }
         .frame(minWidth: 800, minHeight: 520)
+    }
+
+    private func noteUpdatePreview(_ proposal: PendingNoteUpdate, note: MarkdownNote) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(proposal.action == .append ? "Preview appended note" : "Preview updated note")
+                        .font(.title2.weight(.semibold))
+                    Text("Review the complete Markdown result before applying it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Revert") { appState.cancelPendingNoteUpdate() }
+                Button("Apply update") { appState.confirmPendingNoteUpdate() }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .background(.quaternary.opacity(0.35))
+            ScrollView {
+                Markdown(proposal.markdown, baseURL: MarkdownNoteStore.standard.noteFolderURL(for: note))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(28)
+            }
+        }
     }
 
     private func folderHeader(_ folder: String) -> some View {
