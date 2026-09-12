@@ -690,17 +690,24 @@ struct NotesView: View {
             .disabled(!library.canUndoSelectedNote)
             .accessibilityLabel("Undo")
             .help("Undo the last note edit")
-            Button {
-                appState.startNoteUpdate(noteID: note.id)
+            Menu {
+                Button {
+                    appState.startNoteUpdate(noteID: note.id)
+                } label: {
+                    Label("Update", systemImage: "wand.and.stars")
+                }
+                Button {
+                    appState.startNoteAppend(noteID: note.id)
+                } label: {
+                    Label("Append", systemImage: "text.append")
+                }
             } label: {
-                Label("Update", systemImage: "wand.and.stars")
+                Image(systemName: "wand.and.stars")
+                    .frame(minWidth: 24, minHeight: 24)
             }
             .disabled(appState.isRecording || appState.isTranscribing)
-            Button {
-                appState.startNoteAppend(noteID: note.id)
-            } label: {
-                Label("Append", systemImage: "text.append")
-            }
+            .accessibilityLabel("Note actions")
+            .help("Update or append to this note")
             .disabled(appState.isRecording || appState.isTranscribing)
             Toggle(isOn: $preview) {
                 Image(systemName: "eye")
