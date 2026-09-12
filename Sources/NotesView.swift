@@ -277,6 +277,17 @@ final class NotesLibrary: ObservableObject {
     func revealFiles() { NSWorkspace.shared.open(store.directory) }
 }
 
+private struct NotesHeaderIconButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .frame(width: 40, height: 32)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(configuration.isPressed ? Color.accentColor.opacity(0.25) : Color(nsColor: .controlBackgroundColor))
+            )
+    }
+}
+
 struct NotesView: View {
     @EnvironmentObject var appState: AppState
     @ObservedObject var library: NotesLibrary
@@ -684,11 +695,9 @@ struct NotesView: View {
             Button {
                 library.undoSelectedNote()
             } label: {
-                Image(systemName: "arrow.uturn.backward")
-                    .resizable()
-                    .frame(width: 18, height: 18)
-                    .frame(width: 40, height: 32)
+                noteHeaderIcon("arrow.uturn.backward")
             }
+            .buttonStyle(NotesHeaderIconButtonStyle())
             .disabled(!library.canUndoSelectedNote)
             .accessibilityLabel("Undo")
             .help("Undo the last note edit")
@@ -704,28 +713,37 @@ struct NotesView: View {
                     Label("Append", systemImage: "text.append")
                 }
             } label: {
-                Image(systemName: "wand.and.stars")
-                    .resizable()
-                    .frame(width: 18, height: 18)
-                    .frame(width: 40, height: 32)
+                noteHeaderIcon("wand.and.stars")
             }
+            .menuStyle(.borderlessButton)
             .disabled(appState.isRecording || appState.isTranscribing)
             .accessibilityLabel("Note actions")
             .help("Update or append to this note")
             .menuIndicator(.hidden)
-            Toggle(isOn: $preview) {
-                Image(systemName: "eye")
-                    .resizable()
-                    .frame(width: 18, height: 18)
-                    .frame(width: 40, height: 32)
+            .frame(width: 40, height: 32)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+            )
+            Button {
+                preview.toggle()
+            } label: {
+                noteHeaderIcon("eye")
             }
-            .toggleStyle(.button)
+            .buttonStyle(NotesHeaderIconButtonStyle())
+            .foregroundStyle(preview ? Color.accentColor : Color(nsColor: .labelColor))
             .accessibilityLabel("Preview")
             .help("Toggle Markdown preview")
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
         .background(.quaternary.opacity(0.35))
+    }
+
+    private func noteHeaderIcon(_ systemName: String) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 16, weight: .semibold))
+            .frame(width: 18, height: 18)
     }
 
     private func noteRow(_ note: MarkdownNote) -> some View {
