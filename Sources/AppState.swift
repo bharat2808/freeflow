@@ -52,12 +52,12 @@ enum AppBuild {
 
 fileprivate struct NoteFormattingResult: Sendable {
     let finalTranscript: String
-    let outcome: AppState.TranscriptProcessingOutcome
+    let outcome: TranscriptProcessingOutcome
     let prompt: String
 }
 
 private enum NoteProcessingRaceResult: Sendable {
-    case completed(finalTranscript: String, outcome: AppState.TranscriptProcessingOutcome, prompt: String)
+    case completed(finalTranscript: String, outcome: TranscriptProcessingOutcome, prompt: String)
     case timedOut
 }
 
@@ -73,12 +73,12 @@ struct PendingNoteUpdate: Identifiable {
     let markdown: String
 }
 
-private enum CommandInvocation: String {
+enum CommandInvocation: String, Sendable {
     case automatic
     case manual
 }
 
-private enum SessionIntent {
+enum SessionIntent {
     case dictation
     case command(invocation: CommandInvocation, selectedText: String)
 
@@ -232,8 +232,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
         let override = UserDefaults.standard.double(forKey: "note_processing_total_timeout_seconds")
         return override > 0 ? override : 90
     }
-    private static let deprecatedDefaultPostProcessingFallbackModel = "meta-llama/llama-4-scout-17b-16e-instruct"
-    private static let deprecatedDefaultContextModel = "meta-llama/llama-4-scout-17b-16e-instruct"
     @Published var hasCompletedSetup: Bool {
         didSet {
             UserDefaults.standard.set(hasCompletedSetup, forKey: "hasCompletedSetup")
@@ -329,19 +327,19 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
     }
 
-    @Published private(set) var savedHoldCustomShortcut: ShortcutBinding? {
+    @Published var savedHoldCustomShortcut: ShortcutBinding? {
         didSet {
             persistOptionalShortcut(savedHoldCustomShortcut, key: savedHoldCustomShortcutStorageKey)
         }
     }
 
-    @Published private(set) var savedToggleCustomShortcut: ShortcutBinding? {
+    @Published var savedToggleCustomShortcut: ShortcutBinding? {
         didSet {
             persistOptionalShortcut(savedToggleCustomShortcut, key: savedToggleCustomShortcutStorageKey)
         }
     }
 
-    @Published private(set) var savedCopyAgainCustomShortcut: ShortcutBinding? {
+    @Published var savedCopyAgainCustomShortcut: ShortcutBinding? {
         didSet {
             persistOptionalShortcut(savedCopyAgainCustomShortcut, key: savedCopyAgainCustomShortcutStorageKey)
         }
@@ -361,7 +359,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
     }
 
-    @Published private(set) var commandModeManualModifier: CommandModeManualModifier {
+    @Published var commandModeManualModifier: CommandModeManualModifier {
         didSet {
             UserDefaults.standard.set(commandModeManualModifier.rawValue, forKey: commandModeManualModifierStorageKey)
             restartHotkeyMonitoring()
@@ -376,7 +374,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
     @Published var transcriptionLanguage: String {
         didSet {
-            let normalized = Self.normalizeTranscriptionLanguage(transcriptionLanguage)
+            let normalized = AppSettingsLoader.normalizeTranscriptionLanguage(transcriptionLanguage)
             if normalized != transcriptionLanguage {
                 transcriptionLanguage = normalized
                 return
@@ -572,23 +570,23 @@ final class AppState: ObservableObject, @unchecked Sendable {
     let hotkeyManager = HotkeyManager()
     let overlayManager = RecordingOverlayManager()
     private let clipboardController = ClipboardController()
-    private var accessibilityTimer: Timer?
-    private var audioLevelCancellable: AnyCancellable?
+    var accessibilityTimer: Timer?
+    var audioLevelCancellable: AnyCancellable?
     private var debugOverlayTimer: Timer?
     private var recordingInitializationTimer: DispatchSourceTimer?
     private var transcriptionTask: Task<Void, Never>?
     private var transcribingAudioFileName: String?
-    private var contextService: AppContextService
-    private var contextCaptureTask: Task<AppContext?, Never>?
-    private var capturedContext: AppContext?
-    private var hasShownScreenshotPermissionAlert = false
+    var contextService: AppContextService
+    var contextCaptureTask: Task<AppContext?, Never>?
+    var capturedContext: AppContext?
+    var hasShownScreenshotPermissionAlert = false
     private var hasPresentedAutomaticAccessibilityAlert = false
-    private var audioDeviceObservers: [NSObjectProtocol] = []
-    private var needsMicrophoneRefreshAfterRecording = false
+    var audioDeviceObservers: [NSObjectProtocol] = []
+    var needsMicrophoneRefreshAfterRecording = false
     private let pipelineHistoryStore = PipelineHistoryStore()
-    private let shortcutSessionController = DictationShortcutSessionController()
-    private var activeRecordingTriggerMode: RecordingTriggerMode?
-    private var currentSessionIntent: SessionIntent = .dictation
+    let shortcutSessionController = DictationShortcutSessionController()
+    var activeRecordingTriggerMode: RecordingTriggerMode?
+    var currentSessionIntent: SessionIntent = .dictation
     private var pendingSelectionSnapshot: AppSelectionSnapshot?
     private var pendingManualCommandInvocation = false
     private var pendingNoteRecording = false
@@ -597,15 +595,15 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private var activeNoteUpdateTargetID: UUID?
     private var activeNoteUpdateAction: NoteVoiceAction?
     private var pendingShortcutStartTask: Task<Void, Never>?
-    private var pendingShortcutStartMode: RecordingTriggerMode?
-    private var realtimeService: RealtimeTranscriptionService?
-    private var localPreviewService: LocalWhisperPreviewSession?
+    var pendingShortcutStartMode: RecordingTriggerMode?
+    var realtimeService: RealtimeTranscriptionService?
+    var localPreviewService: LocalWhisperPreviewSession?
     private var automaticTerminationDisabled = false
     private var activeAudioInterruption: ActiveAudioInterruption?
     private var pendingOverlayDismissToken: UUID?
-    private var shouldMonitorHotkeys = false
-    private var isCapturingShortcut = false
-    private var isAwaitingMicrophonePermission = false
+    var shouldMonitorHotkeys = false
+    var isCapturingShortcut = false
+    var isAwaitingMicrophonePermission = false
     private var pendingMicrophonePermissionTriggerMode: RecordingTriggerMode?
     private var pendingMicrophonePermissionSelectionSnapshot: AppSelectionSnapshot?
     private var pendingMicrophonePermissionManualCommandRequested: Bool?
@@ -614,8 +612,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
     init() {
         UserDefaults.standard.removeObject(forKey: "force_http2_transcription")
         let hasCompletedSetup = UserDefaults.standard.bool(forKey: "hasCompletedSetup")
-        let apiKey = Self.loadStoredAPIKey(account: apiKeyStorageKey)
-        let apiBaseURL = Self.loadStoredAPIBaseURL(account: "api_base_url")
+        let apiKey = AppSettingsLoader.loadStoredAPIKey(account: apiKeyStorageKey)
+        let apiBaseURL = AppSettingsLoader.loadStoredAPIBaseURL(account: "api_base_url")
         let transcriptionModel = UserDefaults.standard.string(forKey: transcriptionModelStorageKey) ?? Self.defaultTranscriptionModel
         let transcriptionEngine = TranscriptionEngine(
             rawValue: UserDefaults.standard.string(forKey: transcriptionEngineStorageKey) ?? ""
@@ -624,32 +622,32 @@ final class AppState: ObservableObject, @unchecked Sendable {
             ?? Self.defaultLocalWhisperExecutablePath
         let localWhisperModelPath = UserDefaults.standard.string(forKey: localWhisperModelPathStorageKey)
             ?? Self.defaultLocalWhisperModelPath
-        let transcriptionAPIURL = Self.loadOptionalStoredAPIValue(account: transcriptionAPIURLStorageKey)
-        let transcriptionAPIKey = Self.loadStoredAPIKey(account: transcriptionAPIKeyStorageKey)
+        let transcriptionAPIURL = AppSettingsLoader.loadOptionalStoredAPIValue(account: transcriptionAPIURLStorageKey)
+        let transcriptionAPIKey = AppSettingsLoader.loadStoredAPIKey(account: transcriptionAPIKeyStorageKey)
         let postProcessingModel = UserDefaults.standard.string(forKey: postProcessingModelStorageKey) ?? Self.defaultPostProcessingModel
-        let postProcessingFallbackModel = Self.loadStoredPostProcessingFallbackModel(
+        let postProcessingFallbackModel = AppSettingsLoader.loadStoredPostProcessingFallbackModel(
             key: postProcessingFallbackModelStorageKey
         )
-        let contextModel = Self.loadStoredContextModel(key: contextModelStorageKey)
-        let shortcuts = Self.loadShortcutConfiguration(
+        let contextModel = AppSettingsLoader.loadStoredContextModel(key: contextModelStorageKey)
+        let shortcuts = AppSettingsLoader.loadShortcutConfiguration(
             holdKey: holdShortcutStorageKey,
             toggleKey: toggleShortcutStorageKey,
             copyAgainKey: copyAgainShortcutStorageKey
         )
-        let savedHoldCustomShortcut = Self.loadSavedCustomShortcut(
+        let savedHoldCustomShortcut = AppSettingsLoader.loadSavedCustomShortcut(
             forKey: savedHoldCustomShortcutStorageKey,
             fallback: shortcuts.hold.isCustom ? shortcuts.hold : nil
         )
-        let savedToggleCustomShortcut = Self.loadSavedCustomShortcut(
+        let savedToggleCustomShortcut = AppSettingsLoader.loadSavedCustomShortcut(
             forKey: savedToggleCustomShortcutStorageKey,
             fallback: shortcuts.toggle.isCustom ? shortcuts.toggle : nil
         )
-        let savedCopyAgainCustomShortcut = Self.loadSavedCustomShortcut(
+        let savedCopyAgainCustomShortcut = AppSettingsLoader.loadSavedCustomShortcut(
             forKey: savedCopyAgainCustomShortcutStorageKey,
             fallback: shortcuts.copyAgain.isCustom ? shortcuts.copyAgain : nil
         )
         let customVocabulary = UserDefaults.standard.string(forKey: customVocabularyStorageKey) ?? ""
-        let transcriptionLanguage = Self.normalizeTranscriptionLanguage(
+        let transcriptionLanguage = AppSettingsLoader.normalizeTranscriptionLanguage(
             UserDefaults.standard.string(forKey: transcriptionLanguageStorageKey) ?? ""
         )
         let customSystemPrompt = UserDefaults.standard.string(forKey: customSystemPromptStorageKey) ?? ""
@@ -816,21 +814,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
         AppState.writeRecordingStateFlag(false)
     }
 
-    private func removeAudioDeviceObservers() {
-        let notificationCenter = NotificationCenter.default
-        for observer in audioDeviceObservers {
-            notificationCenter.removeObserver(observer)
-        }
-        audioDeviceObservers.removeAll()
-    }
-
-    private static func loadStoredAPIKey(account: String) -> String {
-        if let storedKey = AppSettingsStorage.load(account: account), !storedKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return storedKey
-        }
-        return ""
-    }
-
     private func persistAPIKey(_ value: String) {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
@@ -841,114 +824,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
     }
 
     static let defaultAPIBaseURL = "https://api.groq.com/openai/v1"
-
-    private struct StoredShortcutConfiguration {
-        let hold: ShortcutBinding
-        let toggle: ShortcutBinding
-        let copyAgain: ShortcutBinding
-        let didUpdateHoldStoredValue: Bool
-        let didUpdateToggleStoredValue: Bool
-        let didUpdateCopyAgainStoredValue: Bool
-    }
-
-    private struct StoredOptionalShortcut {
-        let binding: ShortcutBinding?
-        let didUpdateStoredValue: Bool
-    }
-
-    private struct StoredShortcutLoadResult {
-        let binding: ShortcutBinding?
-        let hadStoredValue: Bool
-        let didNormalize: Bool
-    }
-
-    private static func loadStoredAPIBaseURL(account: String) -> String {
-        if let stored = AppSettingsStorage.load(account: account), !stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return stored
-        }
-        return defaultAPIBaseURL
-    }
-
-    private static func loadStoredContextModel(key: String) -> String {
-        guard let stored = UserDefaults.standard.string(forKey: key) else {
-            return defaultContextModel
-        }
-
-        let trimmed = stored.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed == deprecatedDefaultContextModel {
-            UserDefaults.standard.set(defaultContextModel, forKey: key)
-            return defaultContextModel
-        }
-
-        return trimmed.isEmpty ? defaultContextModel : trimmed
-    }
-
-    private static func loadStoredPostProcessingFallbackModel(key: String) -> String {
-        guard let stored = UserDefaults.standard.string(forKey: key) else {
-            return defaultPostProcessingFallbackModel
-        }
-
-        let trimmed = stored.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed == deprecatedDefaultPostProcessingFallbackModel {
-            UserDefaults.standard.set(defaultPostProcessingFallbackModel, forKey: key)
-            return defaultPostProcessingFallbackModel
-        }
-
-        return trimmed.isEmpty ? defaultPostProcessingFallbackModel : trimmed
-    }
-
-    private static func loadShortcutConfiguration(
-        holdKey: String,
-        toggleKey: String,
-        copyAgainKey: String
-    ) -> StoredShortcutConfiguration {
-        let legacyPreset = ShortcutPreset(
-            rawValue: UserDefaults.standard.string(forKey: "hotkey_option") ?? ShortcutPreset.fnKey.rawValue
-        ) ?? .fnKey
-        let hold = legacyPreset.binding
-        let toggle = hold.withAddedModifiers(.command)
-        let storedHold = loadShortcut(forKey: holdKey)
-        let storedToggle = loadShortcut(forKey: toggleKey)
-        let storedCopyAgain = loadShortcut(forKey: copyAgainKey)
-        return StoredShortcutConfiguration(
-            hold: storedHold.binding ?? hold,
-            toggle: storedToggle.binding ?? toggle,
-            copyAgain: storedCopyAgain.binding ?? .disabled,
-            didUpdateHoldStoredValue: storedHold.binding == nil || storedHold.didNormalize,
-            didUpdateToggleStoredValue: storedToggle.binding == nil || storedToggle.didNormalize,
-            didUpdateCopyAgainStoredValue: storedCopyAgain.didNormalize
-        )
-    }
-
-    private static func loadShortcut(forKey key: String) -> StoredShortcutLoadResult {
-        guard let data = UserDefaults.standard.data(forKey: key) else {
-            return StoredShortcutLoadResult(binding: nil, hadStoredValue: false, didNormalize: false)
-        }
-        guard let decoded = try? JSONDecoder().decode(ShortcutBinding.self, from: data) else {
-            return StoredShortcutLoadResult(binding: nil, hadStoredValue: true, didNormalize: false)
-        }
-        let normalized = decoded.normalizedForStorageMigration()
-        return StoredShortcutLoadResult(
-            binding: normalized,
-            hadStoredValue: true,
-            didNormalize: normalized != decoded
-        )
-    }
-
-    private static func loadSavedCustomShortcut(
-        forKey key: String,
-        fallback: ShortcutBinding?
-    ) -> StoredOptionalShortcut {
-        let stored = loadShortcut(forKey: key)
-        if let binding = stored.binding {
-            return StoredOptionalShortcut(binding: binding, didUpdateStoredValue: stored.didNormalize)
-        }
-
-        return StoredOptionalShortcut(
-            binding: fallback,
-            didUpdateStoredValue: stored.hadStoredValue || fallback != nil
-        )
-    }
 
     static func normalizedContextScreenshotMaxDimension(_ value: Int) -> Int {
         contextScreenshotDimensionOptions.contains(value)
@@ -1004,25 +879,12 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private static func loadOptionalStoredAPIValue(account: String) -> String {
-        let stored = AppSettingsStorage.load(account: account) ?? ""
-        return stored.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private static func normalizeTranscriptionLanguage(_ language: String) -> String {
-        let normalized = language.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard transcriptionLanguageOptions.contains(where: { $0.code == normalized }) else {
-            return ""
-        }
-        return normalized
-    }
-
-    private var resolvedTranscriptionBaseURL: String {
+    var resolvedTranscriptionBaseURL: String {
         let trimmed = transcriptionAPIURL.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? apiBaseURL : trimmed
     }
 
-    private var resolvedTranscriptionAPIKey: String {
+    var resolvedTranscriptionAPIKey: String {
         let trimmed = transcriptionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? apiKey : trimmed
     }
@@ -1049,8 +911,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
         )
     }
 
-    private var resolvedTranscriptionLanguage: String? {
-        let normalized = Self.normalizeTranscriptionLanguage(transcriptionLanguage)
+    var resolvedTranscriptionLanguage: String? {
+        let normalized = AppSettingsLoader.normalizeTranscriptionLanguage(transcriptionLanguage)
         return normalized.isEmpty ? nil : normalized
     }
 
@@ -1277,473 +1139,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
     }
 
-    func startAccessibilityPolling() {
-        accessibilityTimer?.invalidate()
-        accessibilityTimer = nil
-        hasAccessibility = AXIsProcessTrusted()
-        hasScreenRecordingPermission = hasScreenCapturePermission()
-        if hasAccessibility && hasScreenRecordingPermission {
-            return
-        }
-        accessibilityTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.hasAccessibility = AXIsProcessTrusted()
-                self.hasScreenRecordingPermission = self.hasScreenCapturePermission()
-                if self.hasAccessibility && self.hasScreenRecordingPermission {
-                    self.accessibilityTimer?.invalidate()
-                    self.accessibilityTimer = nil
-                }
-            }
-        }
-    }
-
-    func stopAccessibilityPolling() {
-        accessibilityTimer?.invalidate()
-        accessibilityTimer = nil
-    }
-
-    func openAccessibilitySettings() {
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
-        let trusted = AXIsProcessTrustedWithOptions(options)
-        if !trusted {
-            openPrivacySettingsPane("Privacy_Accessibility")
-        }
-    }
-
-    func openMicrophoneSettings() {
-        openPrivacySettingsPane("Privacy_Microphone")
-    }
-
-    func requestMicrophoneAccess(completion: @escaping (Bool) -> Void) {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized:
-            refreshAvailableMicrophones()
-            DispatchQueue.main.async {
-                completion(true)
-            }
-        case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
-                DispatchQueue.main.async {
-                    if granted {
-                        self?.refreshAvailableMicrophones()
-                    }
-                    completion(granted)
-                }
-            }
-        case .denied, .restricted:
-            openMicrophoneSettings()
-            DispatchQueue.main.async {
-                completion(false)
-            }
-        @unknown default:
-            openMicrophoneSettings()
-            DispatchQueue.main.async {
-                completion(false)
-            }
-        }
-    }
-
-    func hasScreenCapturePermission() -> Bool {
-        CGPreflightScreenCaptureAccess()
-    }
-
-    func requestScreenCapturePermission() {
-        // ScreenCaptureKit triggers the "Screen & System Audio Recording"
-        // permission dialog on macOS Sequoia+, correctly identifying the
-        // running app (unlike the legacy CGWindowListCreateImage path).
-        SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: false) { [weak self] _, _ in
-            DispatchQueue.main.async {
-                let granted = CGPreflightScreenCaptureAccess()
-                self?.hasScreenRecordingPermission = granted
-                if !granted {
-                    self?.openScreenCaptureSettings()
-                }
-            }
-        }
-
-        hasScreenRecordingPermission = CGPreflightScreenCaptureAccess()
-    }
-
-    func openScreenCaptureSettings() {
-        openPrivacySettingsPane("Privacy_ScreenCapture")
-    }
-
-    private func openPrivacySettingsPane(_ pane: String) {
-        let settingsURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")
-        if let url = settingsURL {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
-    private func setLaunchAtLogin(_ enabled: Bool) {
-        do {
-            if enabled {
-                try SMAppService.mainApp.register()
-            } else {
-                try SMAppService.mainApp.unregister()
-            }
-        } catch {
-            // Revert the toggle on failure without re-triggering didSet
-            let current = SMAppService.mainApp.status == .enabled
-            if current != launchAtLogin {
-                launchAtLogin = current
-            }
-        }
-    }
-
-    func refreshLaunchAtLoginStatus() {
-        let current = SMAppService.mainApp.status == .enabled
-        if current != launchAtLogin {
-            launchAtLogin = current
-        }
-    }
-
-    func refreshAvailableMicrophones() {
-        guard !isRecording, !audioRecorder.isRecording else {
-            needsMicrophoneRefreshAfterRecording = true
-            return
-        }
-
-        needsMicrophoneRefreshAfterRecording = false
-        availableMicrophones = AudioDevice.availableInputDevices()
-    }
-
-    private func refreshAvailableMicrophonesIfNeeded() {
-        guard needsMicrophoneRefreshAfterRecording else { return }
-        refreshAvailableMicrophones()
-    }
-
-    private func installAudioDeviceObservers() {
-        removeAudioDeviceObservers()
-
-        let notificationCenter = NotificationCenter.default
-        let refreshOnAudioDeviceChange: (Notification) -> Void = { [weak self] notification in
-            guard let device = notification.object as? AVCaptureDevice,
-                  device.hasMediaType(.audio) else {
-                return
-            }
-            self?.refreshAvailableMicrophones()
-        }
-
-        audioDeviceObservers.append(
-            notificationCenter.addObserver(
-                forName: .AVCaptureDeviceWasConnected,
-                object: nil,
-                queue: .main,
-                using: refreshOnAudioDeviceChange
-            )
-        )
-        audioDeviceObservers.append(
-            notificationCenter.addObserver(
-                forName: .AVCaptureDeviceWasDisconnected,
-                object: nil,
-                queue: .main,
-                using: refreshOnAudioDeviceChange
-            )
-        )
-    }
-
-    var usesFnShortcut: Bool {
-        holdShortcut.usesFnKey || toggleShortcut.usesFnKey || copyAgainShortcut.usesFnKey
-    }
-
-    var hasEnabledHoldShortcut: Bool {
-        !holdShortcut.isDisabled
-    }
-
-    var hasEnabledToggleShortcut: Bool {
-        !toggleShortcut.isDisabled
-    }
-
-    var shortcutStatusText: String {
-        if hotkeyMonitoringErrorMessage != nil {
-            return "Global shortcuts unavailable"
-        }
-
-        switch (hasEnabledHoldShortcut, hasEnabledToggleShortcut) {
-        case (true, true):
-            return "Hold \(holdShortcut.displayName) or tap \(toggleShortcut.displayName) to dictate"
-        case (true, false):
-            return "Hold \(holdShortcut.displayName) to dictate"
-        case (false, true):
-            return "Tap \(toggleShortcut.displayName) to dictate"
-        case (false, false):
-            return "No dictation shortcut enabled"
-        }
-    }
-
-    var shortcutStartDelayMilliseconds: Int {
-        Int((shortcutStartDelay * 1000).rounded())
-    }
-
-    func savedCustomShortcut(for role: ShortcutRole) -> ShortcutBinding? {
-        switch role {
-        case .hold:
-            return savedHoldCustomShortcut
-        case .toggle:
-            return savedToggleCustomShortcut
-        case .copyAgain:
-            return savedCopyAgainCustomShortcut
-        }
-    }
-
-    var commandModeManualModifierValidationMessage: String? {
-        guard isCommandModeEnabled, commandModeStyle == .manual else { return nil }
-        return commandModeManualModifierCollisionMessage(for: commandModeManualModifier)
-    }
-
-    @discardableResult
-    func setCommandModeEnabled(_ enabled: Bool) -> String? {
-        isCommandModeEnabled = enabled
-        if enabled, commandModeStyle == .manual {
-            return commandModeManualModifierCollisionMessage(for: commandModeManualModifier)
-        }
-        return nil
-    }
-
-    @discardableResult
-    func setCommandModeStyle(_ style: CommandModeStyle) -> String? {
-        commandModeStyle = style
-        if isCommandModeEnabled, style == .manual {
-            return commandModeManualModifierCollisionMessage(for: commandModeManualModifier)
-        }
-        return nil
-    }
-
-    @discardableResult
-    func setCommandModeManualModifier(_ modifier: CommandModeManualModifier) -> String? {
-        // Match sibling setters: always commit, then validate.
-        commandModeManualModifier = modifier
-        if isCommandModeEnabled, commandModeStyle == .manual {
-            return commandModeManualModifierCollisionMessage(for: modifier)
-        }
-        return nil
-    }
-
-    @discardableResult
-    func setShortcut(_ binding: ShortcutBinding, for role: ShortcutRole) -> String? {
-        let binding = binding.normalizedForStorageMigration()
-
-        if role == .hold || role == .toggle {
-            let otherDictationBinding = role == .hold ? toggleShortcut : holdShortcut
-            guard !binding.conflicts(with: otherDictationBinding) else {
-                return "Hold and tap shortcuts must be distinct."
-            }
-        }
-
-        if role != .copyAgain, binding.conflicts(with: copyAgainShortcut) {
-            return "This shortcut is already used by Paste Again."
-        }
-        if role == .copyAgain {
-            if binding.conflicts(with: holdShortcut) {
-                return "Paste Again cannot share a shortcut with Hold to Talk."
-            }
-            if binding.conflicts(with: toggleShortcut) {
-                return "Paste Again cannot share a shortcut with Tap to Toggle."
-            }
-            if isCommandModeEnabled, commandModeStyle == .manual,
-               bindingCollides(binding, with: commandModeManualModifier) {
-                return "Paste Again cannot share the Edit Mode modifier."
-            }
-        }
-
-        switch role {
-        case .hold:
-            if binding.isCustom {
-                savedHoldCustomShortcut = binding
-            }
-            holdShortcut = binding
-        case .toggle:
-            if binding.isCustom {
-                savedToggleCustomShortcut = binding
-            }
-            toggleShortcut = binding
-        case .copyAgain:
-            if binding.isCustom {
-                savedCopyAgainCustomShortcut = binding
-            }
-            copyAgainShortcut = binding
-        }
-
-        return nil
-    }
-
-    private func commandModeManualModifierCollisionMessage(
-        for modifier: CommandModeManualModifier,
-        holdBinding: ShortcutBinding? = nil,
-        toggleBinding: ShortcutBinding? = nil,
-        copyAgainBinding: ShortcutBinding? = nil
-    ) -> String? {
-        let holdBinding = holdBinding ?? holdShortcut
-        let toggleBinding = toggleBinding ?? toggleShortcut
-        let copyAgainBinding = copyAgainBinding ?? copyAgainShortcut
-        let manualModifier = modifier.shortcutModifier
-
-        if !holdBinding.isDisabled && holdBinding.modifiers.contains(manualModifier) {
-            return "That modifier is already part of the hold shortcut."
-        }
-        if !toggleBinding.isDisabled && toggleBinding.modifiers.contains(manualModifier) {
-            return "That modifier is already part of the tap shortcut."
-        }
-        if !copyAgainBinding.isDisabled && copyAgainBinding.modifiers.contains(manualModifier) {
-            return "That modifier is already part of the Paste Again shortcut."
-        }
-        // Modifier-only bindings carry identity in keyCode, not modifiers.
-        if !holdBinding.isDisabled,
-           holdBinding.kind == .modifierKey,
-           let bindingModifier = ShortcutBinding.modifier(forKeyCode: holdBinding.keyCode),
-           bindingModifier == manualModifier {
-            return "That modifier is already the hold shortcut."
-        }
-        if !toggleBinding.isDisabled,
-           toggleBinding.kind == .modifierKey,
-           let bindingModifier = ShortcutBinding.modifier(forKeyCode: toggleBinding.keyCode),
-           bindingModifier == manualModifier {
-            return "That modifier is already the tap shortcut."
-        }
-        if !copyAgainBinding.isDisabled,
-           copyAgainBinding.kind == .modifierKey,
-           let bindingModifier = ShortcutBinding.modifier(forKeyCode: copyAgainBinding.keyCode),
-           bindingModifier == manualModifier {
-            return "That modifier is already the Paste Again shortcut."
-        }
-
-        return nil
-    }
-
-    private func bindingCollides(_ binding: ShortcutBinding, with modifier: CommandModeManualModifier) -> Bool {
-        guard !binding.isDisabled else { return false }
-        let manualModifier = modifier.shortcutModifier
-        if binding.modifiers.contains(manualModifier) { return true }
-        if binding.kind == .modifierKey,
-           let bindingModifier = ShortcutBinding.modifier(forKeyCode: binding.keyCode),
-           bindingModifier == manualModifier {
-            return true
-        }
-        return false
-    }
-
-    func startHotkeyMonitoring() {
-        shouldMonitorHotkeys = true
-        hotkeyManager.onShortcutEvent = { [weak self] event in
-            DispatchQueue.main.async {
-                self?.handleShortcutEvent(event)
-            }
-        }
-        hotkeyManager.onEscapeKeyPressed = { [weak self] in
-            self?.handleEscapeKeyPress() ?? false
-        }
-        restartHotkeyMonitoring()
-    }
-
-    func stopHotkeyMonitoring() {
-        shouldMonitorHotkeys = false
-        hotkeyMonitoringErrorMessage = nil
-        hotkeyManager.onShortcutEvent = nil
-        hotkeyManager.onEscapeKeyPressed = nil
-        hotkeyManager.stop()
-    }
-
-    func suspendHotkeyMonitoringForShortcutCapture() {
-        isCapturingShortcut = true
-        restartHotkeyMonitoring()
-    }
-
-    func resumeHotkeyMonitoringAfterShortcutCapture() {
-        isCapturingShortcut = false
-        restartHotkeyMonitoring()
-    }
-
-    private var activeShortcutConfiguration: ShortcutConfiguration {
-        let permittedAdditionalExactMatchModifiers: ShortcutModifiers
-        if isCommandModeEnabled, commandModeStyle == .manual {
-            permittedAdditionalExactMatchModifiers = commandModeManualModifier.shortcutModifier
-        } else {
-            permittedAdditionalExactMatchModifiers = []
-        }
-
-        return ShortcutConfiguration(
-            hold: holdShortcut,
-            toggle: toggleShortcut,
-            copyAgain: copyAgainShortcut,
-            permittedAdditionalExactMatchModifiers: permittedAdditionalExactMatchModifiers
-        )
-    }
-
-    private func restartHotkeyMonitoring() {
-        guard shouldMonitorHotkeys, !isCapturingShortcut, !isAwaitingMicrophonePermission else {
-            hotkeyManager.stop()
-            return
-        }
-
-        do {
-            try hotkeyManager.start(configuration: activeShortcutConfiguration)
-            hotkeyMonitoringErrorMessage = nil
-        } catch {
-            hotkeyMonitoringErrorMessage = error.localizedDescription
-            os_log(.error, log: recordingLog, "Hotkey monitoring failed to start: %{public}@", error.localizedDescription)
-        }
-    }
-
-    private func handleShortcutEvent(_ event: ShortcutEvent) {
-        if event == .copyAgainTriggered {
-            copyLastTranscriptToPasteboard()
-            return
-        }
-
-        guard let action = shortcutSessionController.handle(event: event, isTranscribing: isTranscribing) else {
-            return
-        }
-
-        switch action {
-        case .start(let mode):
-            os_log(.info, log: recordingLog, "Shortcut start fired for mode %{public}@", mode.rawValue)
-            scheduleShortcutStart(mode: mode)
-        case .stop:
-            cancelPendingShortcutStart()
-            guard isRecording else {
-                shortcutSessionController.reset()
-                activeRecordingTriggerMode = nil
-                return
-            }
-            stopAndTranscribe()
-        case .switchedToToggle:
-            if isRecording {
-                activeRecordingTriggerMode = .toggle
-                overlayManager.setRecordingTriggerMode(.toggle, animated: true)
-            } else if pendingShortcutStartMode != nil {
-                pendingShortcutStartMode = .toggle
-            }
-        }
-    }
-
-    private func handleEscapeKeyPress() -> Bool {
-        if isTranscribing {
-            cancelTranscription()
-            return true
-        }
-
-        if pendingShortcutStartMode == .toggle || activeRecordingTriggerMode == .toggle {
-            cancelToggleShortcutSession()
-            return true
-        }
-
-        return false
-    }
-
-    /// Copies the last transcript to the pasteboard and pastes it into the
-    /// focused app — Wispr Flow style. Reuses the dictation paste pipeline so
-    /// preserveClipboard is honored and the synthetic Cmd+V waits for the
-    /// trigger shortcut to be fully released.
-    func copyLastTranscriptToPasteboard() {
-        guard !lastTranscript.isEmpty else { return }
-        let pendingClipboardRestore = writeTranscriptToPasteboard(lastTranscript)
-        pasteAtCursorWhenShortcutReleased { [weak self] in
-            self?.restoreClipboardIfNeeded(pendingClipboardRestore)
-        }
-    }
-
     let notesLibrary = NotesLibrary()
 
     func toggleRecording() {
@@ -1832,7 +1227,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         stopAndTranscribe()
     }
 
-    private func cancelToggleShortcutSession() {
+    func cancelToggleShortcutSession() {
         guard pendingShortcutStartMode == .toggle || activeRecordingTriggerMode == .toggle else { return }
 
         cancelPendingShortcutStart()
@@ -1865,7 +1260,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private func cancelTranscription() {
+    func cancelTranscription() {
         guard isTranscribing else { return }
 
         transcriptionTask?.cancel()
@@ -1897,7 +1292,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private func scheduleShortcutStart(mode: RecordingTriggerMode) {
+    func scheduleShortcutStart(mode: RecordingTriggerMode) {
         cancelPendingShortcutStart(resetMode: false)
         pendingSelectionSnapshot = contextService.collectSelectionSnapshot()
         pendingManualCommandInvocation = hotkeyManager.currentPressedModifiers.contains(
@@ -1928,7 +1323,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private func cancelPendingShortcutStart(resetMode: Bool = true) {
+    func cancelPendingShortcutStart(resetMode: Bool = true) {
         pendingShortcutStartTask?.cancel()
         pendingShortcutStartTask = nil
         pendingSelectionSnapshot = nil
@@ -2231,7 +1626,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private func restoreAudioInterruptionIfNeeded() {
+    func restoreAudioInterruptionIfNeeded() {
         guard let activeAudioInterruption else { return }
         self.activeAudioInterruption = nil
 
@@ -2249,7 +1644,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         automaticTerminationDisabled = true
     }
 
-    private func endCriticalDictationActivity() {
+    func endCriticalDictationActivity() {
         guard automaticTerminationDisabled else { return }
         ProcessInfo.processInfo.enableAutomaticTermination("FreeFlow dictation in progress")
         automaticTerminationDisabled = false
@@ -2460,52 +1855,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
         sound?.play()
     }
 
-    private func findMatchingMacro(for transcript: String) -> VoiceMacro? {
-        macroMatcher.match(transcript: transcript)
-    }
-
-    fileprivate enum TranscriptProcessingOutcome: Sendable {
-        case skippedEmptyRawTranscript
-        case voiceMacro(command: String)
-        case postProcessingSucceeded
-        case postProcessingFailedFallback
-        case preservedExactWording
-        case preservedExactWordingTranslated
-        case preservedExactWordingTranslationFailedFallback
-        case commandModeSucceeded(invocation: CommandInvocation)
-        case commandModeFailedFallback(invocation: CommandInvocation)
-
-        func statusMessage(isRetry: Bool = false) -> String {
-            switch self {
-            case .skippedEmptyRawTranscript:
-                return "Skipped macros and post-processing for empty raw transcript"
-            case .voiceMacro(let command):
-                return "Voice macro used: \(command)"
-            case .postProcessingSucceeded:
-                return isRetry ? "Post-processing succeeded (retried)" : "Post-processing succeeded"
-            case .postProcessingFailedFallback:
-                return isRetry
-                    ? "Post-processing failed on retry, using raw transcript"
-                    : "Post-processing failed, using raw transcript"
-            case .preservedExactWording:
-                return "Preserved exact wording, skipped post-processing"
-            case .preservedExactWordingTranslated:
-                return "Preserved exact wording, translated to output language"
-            case .preservedExactWordingTranslationFailedFallback:
-                return "Verbatim translation failed, using untranslated raw transcript"
-            case .commandModeSucceeded(let invocation):
-                return "Edit mode succeeded (\(invocation.rawValue))"
-            case .commandModeFailedFallback(let invocation):
-                return "Edit mode failed, using selected text (\(invocation.rawValue))"
-            }
-        }
-
-        var usedRawTranscriptFallback: Bool {
-            if case .postProcessingFailedFallback = self { return true }
-            return false
-        }
-    }
-
     private func processTranscript(
         _ rawTranscript: String,
         intent: SessionIntent,
@@ -2516,79 +1865,17 @@ final class AppState: ObservableObject, @unchecked Sendable {
         outputLanguage: String = "",
         preserveExactWording: Bool
     ) async -> (finalTranscript: String, outcome: TranscriptProcessingOutcome, prompt: String) {
-        let trimmedRawTranscript = rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard !trimmedRawTranscript.isEmpty else {
-            return ("", .skippedEmptyRawTranscript, "")
-        }
-        if Task.isCancelled {
-            return (trimmedRawTranscript, .postProcessingFailedFallback, "")
-        }
-
-        if case .command(let invocation, let selectedText) = intent {
-            do {
-                let result = try await postProcessingService.commandTransform(
-                    selectedText: selectedText,
-                    voiceCommand: rawTranscript,
-                    context: context,
-                    customVocabulary: customVocabulary,
-                    outputLanguage: outputLanguage
-                )
-                return (result.transcript, .commandModeSucceeded(invocation: invocation), result.prompt)
-            } catch {
-                os_log(.error, log: recordingLog, "Edit mode failed: %{public}@", error.localizedDescription)
-                return (selectedText, .commandModeFailedFallback(invocation: invocation), "")
-            }
-        }
-
-        if let macro = findMatchingMacro(for: trimmedRawTranscript) {
-            os_log(.info, log: recordingLog, "Voice macro triggered: %{public}@", macro.command)
-            return (macro.payload, .voiceMacro(command: macro.command), "")
-        }
-
-        // Preserve-exact-wording mode. Two sub-cases so translation
-        // stays honored:
-        //
-        //   1. No Output Language set — skip the LLM entirely and
-        //      return the raw transcript verbatim.
-        //   2. Output Language IS set — route through a stripped-down
-        //      translate-only prompt. The user asked for another
-        //      language; silently dropping translation defeats their
-        //      settings. The translate-only path preserves filler,
-        //      informal wording, and profanity 1:1 while still hitting
-        //      the target language.
-        if preserveExactWording {
-            let targetLanguage = outputLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
-            if targetLanguage.isEmpty {
-                return (trimmedRawTranscript, .preservedExactWording, "")
-            }
-            do {
-                let result = try await postProcessingService.translateVerbatim(
-                    transcript: trimmedRawTranscript,
-                    targetLanguage: targetLanguage
-                )
-                return (result.transcript, .preservedExactWordingTranslated, result.prompt)
-            } catch {
-                os_log(.error, log: recordingLog,
-                       "Verbatim translation failed: %{public}@",
-                       error.localizedDescription)
-                return (trimmedRawTranscript, .preservedExactWordingTranslationFailedFallback, "")
-            }
-        }
-
-        do {
-            let result = try await postProcessingService.postProcess(
-                transcript: trimmedRawTranscript,
-                context: context,
-                customVocabulary: customVocabulary,
-                customSystemPrompt: customSystemPrompt,
-                outputLanguage: outputLanguage
-            )
-            return (result.transcript, .postProcessingSucceeded, result.prompt)
-        } catch {
-            os_log(.error, log: recordingLog, "Post-processing failed: %{public}@", error.localizedDescription)
-            return (trimmedRawTranscript, .postProcessingFailedFallback, "")
-        }
+        await TranscriptProcessor.process(
+            rawTranscript,
+            intent: intent,
+            context: context,
+            postProcessingService: postProcessingService,
+            macroMatcher: macroMatcher,
+            customVocabulary: customVocabulary,
+            customSystemPrompt: customSystemPrompt,
+            outputLanguage: outputLanguage,
+            preserveExactWording: preserveExactWording
+        )
     }
 
     /// Await the realtime WebSocket's final transcript. If it errors out (or
@@ -2918,7 +2205,7 @@ exactly unless the spoken instruction explicitly asks to remove or convert that 
         }
     }
 
-    private func stopAndTranscribe() {
+    func stopAndTranscribe() {
         let stopStartedAt = CFAbsoluteTimeGetCurrent()
         cancelPendingShortcutStart()
         cancelRecordingInitializationTimer()
@@ -3363,231 +2650,6 @@ exactly unless the spoken instruction explicitly asks to remove or convert that 
         }
     }
 
-    private func startRealtimeStreamingIfEnabled() {
-        if transcriptionEngine == .localWhisper {
-            do {
-                let service = try LocalWhisperTranscriptionService(
-                    executablePath: localWhisperExecutablePath,
-                    modelPath: localWhisperModelPath,
-                    language: resolvedTranscriptionLanguage,
-                    timeoutSeconds: Self.notePreviewTimeoutSeconds
-                )
-                let preview = service.makeLivePreviewSession { [weak self] text in
-                    DispatchQueue.main.async {
-                        guard let self, self.isRecording else { return }
-                        self.liveNoteTranscript = text
-                    }
-                }
-                localPreviewService = preview
-                audioRecorder.onRecordingPCM16Samples = { [weak preview] data in
-                    preview?.appendPCM16(data)
-                }
-            } catch {
-                os_log(.error, log: recordingLog, "failed to start local Whisper preview: %{public}@", error.localizedDescription)
-            }
-            return
-        }
-
-        guard realtimeStreamingEnabled else { return }
-        let trimmedBase = resolvedTranscriptionBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedBase.isEmpty else {
-            os_log(.info, log: recordingLog, "realtime streaming requested but base URL is empty — skipping")
-            return
-        }
-        let model = realtimeStreamingModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        let config = RealtimeTranscriptionService.Configuration(
-            baseURL: trimmedBase,
-            apiKey: resolvedTranscriptionAPIKey,
-            model: model,
-            language: resolvedTranscriptionLanguage
-        )
-        let service = RealtimeTranscriptionService(config: config)
-        service.onPartialUpdate = { [weak self] text in
-            guard let self else { return }
-            self.liveNoteTranscript = text
-        }
-        do {
-            try service.start()
-        } catch {
-            os_log(.error, log: recordingLog, "failed to start realtime service: %{public}@", error.localizedDescription)
-            return
-        }
-        realtimeService = service
-        audioRecorder.onPCM16Samples = { [weak service] data in
-            service?.appendPCM16(data)
-        }
-    }
-
-    private func tearDownRealtimeService() {
-        audioRecorder.onPCM16Samples = nil
-        audioRecorder.onRecordingPCM16Samples = nil
-        realtimeService?.cancel()
-        realtimeService = nil
-        localPreviewService?.stop()
-        localPreviewService = nil
-    }
-
-    private func startContextCapture() {
-        contextCaptureTask?.cancel()
-        capturedContext = nil
-        lastContextSummary = "Collecting app context..."
-        lastPostProcessingStatus = ""
-        lastContextScreenshotDataURL = nil
-        lastContextScreenshotStatus = "Collecting screenshot..."
-
-        contextCaptureTask = Task { [weak self] in
-            guard let self else { return nil }
-            let context = await self.contextService.collectContext()
-            await MainActor.run {
-                self.capturedContext = context
-                self.lastContextSummary = context.contextSummary
-                self.lastContextScreenshotDataURL = context.screenshotDataURL
-                self.lastContextScreenshotStatus = context.screenshotError
-                    ?? "available (\(context.screenshotMimeType ?? "image"))"
-                self.lastContextAppName = context.appName ?? ""
-                self.lastContextBundleIdentifier = context.bundleIdentifier ?? ""
-                self.lastContextWindowTitle = context.windowTitle ?? ""
-                self.lastContextSelectedText = context.selectedText ?? ""
-                self.lastContextLLMPrompt = context.contextPrompt ?? ""
-                self.lastPostProcessingStatus = "App context captured"
-                self.handleScreenshotCaptureIssue(context.screenshotError)
-            }
-            return context
-        }
-    }
-
-    private func fallbackContextAtStop() -> AppContext {
-        let frontmostApp = NSWorkspace.shared.frontmostApplication
-        let windowTitle = focusedWindowTitle(for: frontmostApp)
-        return AppContext(
-            appName: frontmostApp?.localizedName,
-            bundleIdentifier: frontmostApp?.bundleIdentifier,
-            windowTitle: windowTitle,
-            selectedText: nil,
-            currentActivity: "Could not refresh app context at stop time; using text-only post-processing.",
-            contextSystemPrompt: resolvedContextSystemPrompt(),
-            contextPrompt: nil,
-            screenshotDataURL: nil,
-            screenshotMimeType: nil,
-            screenshotError: "No app context captured before stop"
-        )
-    }
-
-    private func resolvedContextSystemPrompt() -> String {
-        let trimmedPrompt = customContextPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmedPrompt.isEmpty ? AppContextService.defaultContextPrompt : trimmedPrompt
-    }
-
-    private func focusedWindowTitle(for app: NSRunningApplication?) -> String? {
-        guard let app else { return nil }
-        let appElement = AXUIElementCreateApplication(app.processIdentifier)
-        return focusedWindowTitle(from: appElement)
-    }
-
-    private func focusedWindowTitle(from appElement: AXUIElement) -> String? {
-        guard let focusedWindow = accessibilityElement(from: appElement, attribute: kAXFocusedWindowAttribute as CFString) else {
-            return nil
-        }
-
-        guard let windowTitle = accessibilityString(from: focusedWindow, attribute: kAXTitleAttribute as CFString) else {
-            return nil
-        }
-
-        return trimmedText(windowTitle)
-    }
-
-    private func accessibilityElement(from element: AXUIElement, attribute: CFString) -> AXUIElement? {
-        var value: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(element, attribute, &value)
-        guard result == .success,
-              let rawValue = value,
-              CFGetTypeID(rawValue) == AXUIElementGetTypeID() else {
-            return nil
-        }
-        return unsafeBitCast(rawValue, to: AXUIElement.self)
-    }
-
-    private func accessibilityString(from element: AXUIElement, attribute: CFString) -> String? {
-        var value: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(element, attribute, &value)
-        guard result == .success, let stringValue = value as? String else { return nil }
-        return stringValue
-    }
-
-    private func trimmedText(_ value: String) -> String? {
-        let trimmed = value
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "\n", with: " ")
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private func handleScreenshotCaptureIssue(_ message: String?) {
-        guard let message, !message.isEmpty else {
-            hasShownScreenshotPermissionAlert = false
-            return
-        }
-
-        os_log(.error, "Screenshot capture issue: %{public}@", message)
-
-        if isScreenCapturePermissionError(message) && !hasShownScreenshotPermissionAlert {
-            hasScreenRecordingPermission = false
-            guard currentSessionIntent.isCommandMode else { return }
-            errorMessage = message
-            hasShownScreenshotPermissionAlert = true
-
-            // Permission errors are fatal — stop recording
-            tearDownRealtimeService()
-            audioRecorder.cancelRecording()
-            audioLevelCancellable?.cancel()
-            audioLevelCancellable = nil
-            contextCaptureTask?.cancel()
-            contextCaptureTask = nil
-            capturedContext = nil
-            isRecording = false
-            restoreAudioInterruptionIfNeeded()
-            shortcutSessionController.reset()
-            activeRecordingTriggerMode = nil
-            endCriticalDictationActivity()
-            statusText = "Screenshot Required"
-            overlayManager.dismiss()
-
-            playAlertSound(named: "Basso")
-            showScreenshotPermissionAlert(message: message)
-        }
-        // Non-permission errors (transient failures) — continue recording without context
-    }
-
-    private func isScreenCapturePermissionError(_ message: String) -> Bool {
-        let lowered = message.lowercased()
-        return lowered.contains("screen recording permission not granted")
-            || lowered.contains("requires screen recording permission")
-    }
-
-    private func showScreenshotPermissionAlert(message: String) {
-        let alert = NSAlert()
-        alert.messageText = "Screen Recording Permission Required"
-        alert.informativeText = "\(message)\n\n\(AppName.displayName) requires Screen Recording permission to capture screenshots for context-aware transcription.\n\nGo to System Settings > Privacy & Security > Screen Recording and enable \(AppName.displayName)."
-        alert.alertStyle = .critical
-        alert.addButton(withTitle: "Open System Settings")
-        alert.addButton(withTitle: "Dismiss")
-        alert.icon = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: nil)
-
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            openScreenCaptureSettings()
-        }
-    }
-
-    private func showScreenshotCaptureErrorAlert(message: String) {
-        let alert = NSAlert()
-        alert.messageText = "Screenshot Capture Failed"
-        alert.informativeText = "\(message)\n\nA screenshot is required for context-aware transcription. Recording has been stopped."
-        alert.alertStyle = .critical
-        alert.addButton(withTitle: "Dismiss")
-        alert.icon = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: nil)
-        _ = alert.runModal()
-    }
-
     func toggleDebugOverlay() {
         if isDebugOverlayActive {
             stopDebugOverlay()
@@ -3698,7 +2760,7 @@ exactly unless the spoken instruction explicitly asks to remove or convert that 
         NotificationCenter.default.post(name: .showSettings, object: nil)
     }
 
-    private func writeTranscriptToPasteboard(_ transcript: String) -> PendingClipboardRestore? {
+    func writeTranscriptToPasteboard(_ transcript: String) -> PendingClipboardRestore? {
         clipboardController.writeTranscript(
             transcript,
             preserveClipboard: preserveClipboard,
@@ -3706,11 +2768,11 @@ exactly unless the spoken instruction explicitly asks to remove or convert that 
         )
     }
 
-    private func restoreClipboardIfNeeded(_ pendingRestore: PendingClipboardRestore?) {
+    func restoreClipboardIfNeeded(_ pendingRestore: PendingClipboardRestore?) {
         clipboardController.restoreIfNeeded(pendingRestore)
     }
 
-    private func pasteAtCursorWhenShortcutReleased(completion: (() -> Void)? = nil) {
+    func pasteAtCursorWhenShortcutReleased(completion: (() -> Void)? = nil) {
         clipboardController.pasteWhenShortcutReleased(
             isShortcutPressed: { [weak self] in
                 self?.hotkeyManager.hasPressedShortcutInputs ?? false

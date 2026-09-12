@@ -55,7 +55,7 @@ ICON_SOURCE = Resources/AppIcon-Source.png
 ICON_ICNS = Resources/AppIcon.icns
 endif
 
-.PHONY: all check clean run icon dmg codesign-dmg notarize test typecheck validate markdownui
+.PHONY: all check clean run icon dmg codesign-dmg notarize test typecheck validate markdownui ide-index
 
 all: $(APP_EXECUTABLE_TARGET)
 
@@ -152,8 +152,13 @@ endif
 
 validate:
 	plutil -lint Info.plist FreeFlow.entitlements
+	swiftc -typecheck Scripts/generate-compilation-database.swift
+	@ruby -rjson -e 'ARGV.each { |file| JSON.parse(File.read(file)) }' .sourcekit-lsp/config.json
 	@set -e; for script in $(SHELL_SCRIPTS); do bash -n "$$script"; done
 	@ruby -e 'require "yaml"; ARGV.each { |file| YAML.load_file(file) }' $(YAML_FILES)
+
+ide-index:
+	swift Scripts/generate-compilation-database.swift
 
 icon: $(ICON_ICNS)
 
