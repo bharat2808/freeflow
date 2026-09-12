@@ -654,12 +654,15 @@ struct NotesView: View {
                         Label("Delete folder", systemImage: "trash")
                     }
                 } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.body)
+                    Image(systemName: "ellipsis.circle")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .symbolRenderingMode(.hierarchical)
                         .frame(width: 28, height: 28)
                 }
                 .buttonStyle(.borderless)
                 .menuStyle(.borderlessButton)
+                .foregroundStyle(.primary)
                 .help("Folder actions")
             }
         }
