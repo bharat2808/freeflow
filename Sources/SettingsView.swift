@@ -147,7 +147,7 @@ struct ProviderSettingsFields: View {
                 }
                 await MainActor.run {
                     appState.localWhisperExecutablePath = executableURL.path
-                    localWhisperInstallMessage = "Installed at (executableURL.path)"
+                    localWhisperInstallMessage = "Installed at \(executableURL.path)"
                     isInstallingLocalWhisper = false
                 }
             } catch {
