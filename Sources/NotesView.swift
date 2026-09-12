@@ -279,7 +279,6 @@ struct NotesView: View {
                     }
                 }
             }
-            .searchable(text: $search, prompt: "Search notes")
             .contextMenu {
                 Button {
                     library.create("# Untitled note\n\n")
@@ -329,6 +328,7 @@ struct NotesView: View {
                     .padding(.top, 12)
                 }
                 if let note = library.notes.first(where: { $0.id == library.selectedID }) {
+                    noteHeader(note)
                     if preview {
                         ScrollView {
                             Text((try? AttributedString(markdown: note.markdown, options: .init(interpretedSyntax: .full))) ?? AttributedString(note.markdown))
@@ -358,28 +358,32 @@ struct NotesView: View {
             }
         }
         .toolbar {
-            Button { appState.toggleNoteRecording() } label: {
-                Label(appState.isRecording ? "Stop & save" : "Record note", systemImage: appState.isRecording ? "stop.circle.fill" : "mic.fill")
-            }.disabled(appState.isTranscribing)
-            Toggle(isOn: $preview) { Label("Preview", systemImage: "eye") }
-            Menu {
-                Button {
-                    if let selectedID = library.selectedID { appState.startNoteUpdate(noteID: selectedID) }
-                } label: { Label("Update note from voice", systemImage: "wand.and.stars") }
-                .disabled(library.selectedID == nil || appState.isRecording || appState.isTranscribing)
-                Button {
-                    if let selectedID = library.selectedID { appState.startNoteAppend(noteID: selectedID) }
-                } label: { Label("Append voice to note", systemImage: "text.append") }
-                .disabled(library.selectedID == nil || appState.isRecording || appState.isTranscribing)
-            } label: {
-                Label("Voice actions", systemImage: "waveform")
+            ToolbarItem {
+                Button { appState.toggleNoteRecording() } label: {
+                    Label(appState.isRecording ? "Stop & save" : "New note", systemImage: appState.isRecording ? "stop.circle.fill" : "mic.fill")
+                }.disabled(appState.isTranscribing)
             }
-            Menu {
-                Button { library.revealFiles() } label: { Label("Show files", systemImage: "folder") }
-                Button { library.reload() } label: { Label("Refresh notes", systemImage: "arrow.clockwise") }
-                Button { NotificationCenter.default.post(name: .showSettings, object: nil) } label: { Label("Settings", systemImage: "gear") }
-            } label: {
-                Label("More", systemImage: "ellipsis.circle")
+            ToolbarItem(placement: .primaryAction) {
+                HStack(spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(.secondary)
+                        TextField("Search notes", text: $search)
+                            .textFieldStyle(.plain)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .frame(width: 260)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                    Menu {
+                        Button { library.revealFiles() } label: { Label("Show files", systemImage: "folder") }
+                        Button { library.reload() } label: { Label("Refresh notes", systemImage: "arrow.clockwise") }
+                        Button { NotificationCenter.default.post(name: .showSettings, object: nil) } label: { Label("Settings", systemImage: "gear") }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .accessibilityLabel("More")
+                    }
+                }
             }
         }
         .confirmationDialog(
@@ -496,6 +500,39 @@ struct NotesView: View {
             }
         }
         .contentShape(Rectangle())
+    }
+
+    private func noteHeader(_ note: MarkdownNote) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(note.title)
+                    .font(.title2.weight(.semibold))
+                    .lineLimit(1)
+                Text(note.modified, style: .date)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 12)
+            Button {
+                appState.startNoteUpdate(noteID: note.id)
+            } label: {
+                Label("Update", systemImage: "wand.and.stars")
+            }
+            .disabled(appState.isRecording || appState.isTranscribing)
+            Button {
+                appState.startNoteAppend(noteID: note.id)
+            } label: {
+                Label("Append", systemImage: "text.append")
+            }
+            .disabled(appState.isRecording || appState.isTranscribing)
+            Toggle(isOn: $preview) {
+                Label("Preview", systemImage: "eye")
+            }
+            .toggleStyle(.button)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background(.quaternary.opacity(0.35))
     }
 
     private func noteRow(_ note: MarkdownNote) -> some View {
