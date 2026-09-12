@@ -9,8 +9,8 @@
 </p>
 
 <p align="center">
-  <b>FreeFlow Notes fork</b><br>
-  <sub>Build locally with <code>make run</code> on macOS (Apple Silicon + Intel)</sub>
+  <a href="https://github.com/zachlatta/freeflow/releases/latest/download/FreeFlow.dmg"><b>⬇ Download FreeFlow.dmg</b></a><br>
+  <sub>Works on all Macs (Apple Silicon + Intel)</sub>
 </p>
 
 ---
@@ -25,21 +25,13 @@
 
 ## Overview
 
-FreeFlow Notes is a free Mac dictation and Markdown notes app. It gives you fast AI transcription and context-aware cleanup without a monthly subscription, then saves each completed dictation as a local Markdown note.
+FreeFlow is a free Mac dictation app inspired by [Wispr Flow](https://wisprflow.ai/), [Superwhisper](https://superwhisper.com/), and [Monologue](https://www.monologue.to/). It gives you fast AI transcription, context-aware cleanup, and voice-driven text editing without a monthly subscription.
 
 ## Quick Start
 
-1. Clone this fork, then run `make run` to build and launch the regular FreeFlow Notes app. Use `make dev` only when you explicitly need the separate developer bundle.
+1. Download the app from above or [click here](https://github.com/zachlatta/freeflow/releases/latest/download/FreeFlow.dmg)
 2. Get a free Groq API key from [groq.com](https://groq.com/)
-3. Hold `Fn` to talk, or tap `Command-Fn` to start and stop dictation. FreeFlow Notes post-processes the transcript into Markdown and opens it in the notes window.
-
-The Makefile automatically signs local builds with the first Apple Development certificate on the Mac when one is available. This keeps macOS Accessibility consent valid across rebuilds. If no development certificate is installed, builds use ad-hoc signing; macOS may then require Accessibility to be removed and added again after each rebuild.
-
-## Markdown Notes
-
-After setup, the notes window opens automatically. Use the sidebar to browse previous notes or search their contents. Select a note and choose **Move note** to place it in a folder; nested folders such as `Projects/Ideas` are supported. **Preview** renders Markdown, and **Show files** opens the local notes folder. Notes are stored as UUID-named `.md` files under `~/Library/Application Support/FreeFlow Notes/notes`, so they remain portable and editable with any text editor.
-
-The note-taking system prompt is editable in Settings → Prompts → Note-taking Prompt. Recordings longer than 90 seconds are split into ordered WAV chunks with a short overlap at each boundary so words are not cut between requests. The resulting sections are formatted separately and merged in passes so one very long recording can become a single coherent note without exceeding a model request size. Note transcription and formatting requests allow up to two minutes each; the normal dictation timeout remains configurable separately.
+3. Hold `Fn` to talk, or tap `Command-Fn` to start and stop dictation, and have whatever you say pasted into the current text field
 
 ## Features
 
@@ -90,18 +82,15 @@ FreeFlow can use OpenAI-compatible local or self-hosted providers instead of Gro
 
 Local models are often slower than hosted providers, especially on cold start, long recordings, or busy hardware.
 
-For fully local speech-to-text, install `whisper-cpp` with `brew install whisper-cpp`, then open Settings → Provider Settings and change **Transcription Engine** to **Local Whisper**. Choose a `whisper-cli` executable plus a Whisper `.bin` or `.gguf` model. The app runs that executable locally for every audio chunk; no transcription API key is used. While recording, FreeFlow runs short local preview passes and updates the live transcript under the banner; after you stop, it re-transcribes the complete WAV and uses that result for Markdown post-processing. The app auto-detects `whisper-cli` and the standard `~/.cache/whisper/ggml-base.en.bin` model when present. whisper.cpp can use Metal on Apple Silicon; download a model separately because the Homebrew package does not include model files.
-
 <details>
   <summary>Configure longer timeouts for local models</summary>
 
-  FreeFlow keeps normal requests at 20 seconds. Individual note-processing requests can run for up to 120 seconds, while a long note has a 90-second overall formatting deadline. You can override these limits with macOS defaults:
+  FreeFlow keeps the default network timeout at 20 seconds, but you can extend it with macOS defaults:
 
 ```bash
 defaults write com.zachlatta.freeflow transcription_timeout_seconds -float 120
 defaults write com.zachlatta.freeflow post_processing_timeout_seconds -float 120
 defaults write com.zachlatta.freeflow context_request_timeout_seconds -float 120
-defaults write com.zachlatta.freeflow note_processing_total_timeout_seconds -float 90
 ```
 
 The timeout keys are:
@@ -109,15 +98,13 @@ The timeout keys are:
 - `transcription_timeout_seconds`: audio transcription requests
 - `post_processing_timeout_seconds`: transcript cleanup and edit mode requests
 - `context_request_timeout_seconds`: nearby app context requests
-- `note_processing_total_timeout_seconds`: overall deadline for a long note's formatting and synthesis pipeline
 
-Only positive values are used. Removing a custom key restores that setting's built-in default:
+Only positive values are used. Remove a custom timeout to return to the 20-second default:
 
 ```bash
 defaults delete com.zachlatta.freeflow transcription_timeout_seconds
 defaults delete com.zachlatta.freeflow post_processing_timeout_seconds
 defaults delete com.zachlatta.freeflow context_request_timeout_seconds
-defaults delete com.zachlatta.freeflow note_processing_total_timeout_seconds
 ```
 
 </details>
