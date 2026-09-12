@@ -430,7 +430,7 @@ struct SetupView: View {
                                 keyValidationError = nil
                             }
 
-                        Text("For OpenRouter, paste the sk-or-v1-… key here. The separate transcription key in Advanced Settings is only needed when speech-to-text uses another provider.")
+                        Text("Use the API key for your configured provider. The separate transcription key in Advanced Settings is only needed when speech-to-text uses another provider.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
