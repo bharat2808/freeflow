@@ -681,6 +681,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private var pendingManualCommandInvocation = false
     private var pendingNoteRecording = false
     private var activeNoteRecording = false
+    private var activeNoteUpdateTargetID: UUID?
+    private var activeNoteUpdateAction: NoteVoiceAction?
     private var pendingShortcutStartTask: Task<Void, Never>?
     private var pendingShortcutStartMode: RecordingTriggerMode?
     private var realtimeService: RealtimeTranscriptionService?
@@ -1886,6 +1888,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
     /// menu-bar dictation continues to paste into the focused text field.
     func startNoteRecording() {
         guard !isRecording, !isTranscribing else { return }
+        activeNoteUpdateTargetID = nil
+        activeNoteUpdateAction = nil
         pendingNoteRecording = true
         toggleRecording()
     }
@@ -1906,6 +1910,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
               notesLibrary.notes.contains(where: { $0.id == noteID }) else { return }
         noteUpdateTargetID = noteID
         noteVoiceAction = .update
+        activeNoteUpdateTargetID = noteID
+        activeNoteUpdateAction = .update
         liveNoteTranscript = ""
         pendingNoteRecording = true
         toggleRecording()
@@ -1916,6 +1922,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
               notesLibrary.notes.contains(where: { $0.id == noteID }) else { return }
         noteUpdateTargetID = noteID
         noteVoiceAction = .append
+        activeNoteUpdateTargetID = noteID
+        activeNoteUpdateAction = .append
         liveNoteTranscript = ""
         pendingNoteRecording = true
         toggleRecording()
@@ -1928,6 +1936,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.pendingNoteUpdate = nil
         noteUpdateTargetID = nil
         noteVoiceAction = nil
+        activeNoteUpdateTargetID = nil
+        activeNoteUpdateAction = nil
         if saved {
             NotificationCenter.default.post(name: .showNotes, object: nil)
         }
@@ -1937,6 +1947,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
         pendingNoteUpdate = nil
         noteUpdateTargetID = nil
         noteVoiceAction = nil
+        activeNoteUpdateTargetID = nil
+        activeNoteUpdateAction = nil
         statusText = "Update cancelled"
     }
 
@@ -3109,8 +3121,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
             sessionContext = capturedContext
         }
         let inFlightContextTask = contextCaptureTask
-        let noteUpdateTargetID = self.noteUpdateTargetID
-        let noteVoiceAction = self.noteVoiceAction ?? .update
+        let noteUpdateTargetID = activeNoteUpdateTargetID ?? self.noteUpdateTargetID
+        let noteVoiceAction = activeNoteUpdateAction ?? self.noteVoiceAction ?? .update
         let isNoteUpdate = noteUpdateTargetID != nil
         let noteUpdateTarget = noteUpdateTargetID.flatMap { id in
             notesLibrary.notes.first(where: { $0.id == id })
