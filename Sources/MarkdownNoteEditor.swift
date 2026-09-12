@@ -20,9 +20,12 @@ struct NoteAttachmentPayload {
 
 struct MarkdownNoteEditor: NSViewRepresentable {
     let text: Binding<String>
+    let selectedRange: Binding<NSRange>
     let importAttachment: (NoteAttachmentPayload) -> String?
 
-    func makeCoordinator() -> Coordinator { Coordinator(text: text) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: text, selectedRange: selectedRange)
+    }
 
     func makeNSView(context: Context) -> AttachmentTextView {
         let textView = AttachmentTextView()
@@ -41,23 +44,41 @@ struct MarkdownNoteEditor: NSViewRepresentable {
             return true
         }
         textView.string = text.wrappedValue
+        textView.setSelectedRange(clampedSelection(selectedRange.wrappedValue, for: textView.string))
         return textView
     }
 
     func updateNSView(_ nsView: AttachmentTextView, context: Context) {
         if nsView.string != text.wrappedValue {
             nsView.string = text.wrappedValue
+            nsView.setSelectedRange(clampedSelection(selectedRange.wrappedValue, for: nsView.string))
         }
+    }
+
+    private func clampedSelection(_ range: NSRange, for string: String) -> NSRange {
+        let length = (string as NSString).length
+        let location = min(max(range.location, 0), length)
+        let selectionLength = min(max(range.length, 0), length - location)
+        return NSRange(location: location, length: selectionLength)
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         let text: Binding<String>
+        let selectedRange: Binding<NSRange>
 
-        init(text: Binding<String>) { self.text = text }
+        init(text: Binding<String>, selectedRange: Binding<NSRange>) {
+            self.text = text
+            self.selectedRange = selectedRange
+        }
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             text.wrappedValue = textView.string
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            selectedRange.wrappedValue = textView.selectedRange()
         }
     }
 }
