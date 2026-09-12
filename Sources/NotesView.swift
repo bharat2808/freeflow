@@ -336,8 +336,10 @@ struct NotesView: View {
                     noteHeader(note)
                     if preview {
                         ScrollView {
-                            Text((try? AttributedString(markdown: note.markdown, options: .init(interpretedSyntax: .full))) ?? AttributedString(note.markdown))
-                                .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(28)
+                            MarkdownPreview(markdown: note.markdown)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(28)
                         }
                     } else {
                         TextEditor(text: Binding(get: {
@@ -606,4 +608,100 @@ struct NotesView: View {
 
 extension Notification.Name {
     static let showNotes = Notification.Name("showNotes")
+}
+
+private struct MarkdownPreview: View {
+    let markdown: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(markdown.split(separator: "\n", omittingEmptySubsequences: false).enumerated()), id: \.offset) { _, line in
+                lineView(String(line))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func lineView(_ line: String) -> some View {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty {
+            Spacer().frame(height: 4)
+        } else if let heading = headingContent(from: trimmed) {
+            inlineText(heading.text)
+                .font(heading.font)
+                .padding(.top, 8)
+        } else if let bullet = listContent(from: trimmed) {
+            HStack(alignment: .top, spacing: 8) {
+                Text(bullet.marker).font(.body.weight(.semibold))
+                inlineText(bullet.text)
+            }
+            .padding(.leading, bullet.indent)
+        } else if trimmed.hasPrefix("> ") {
+            inlineText(String(trimmed.dropFirst(2)))
+                .italic()
+                .padding(.leading, 12)
+                .overlay(alignment: .leading) {
+                    Rectangle().fill(.secondary).frame(width: 3)
+                }
+        } else {
+            inlineText(trimmed)
+        }
+    }
+
+    private func headingContent(from line: String) -> (text: String, font: Font)? {
+        let hashes = line.prefix { $0 == "#" }
+        guard !hashes.isEmpty,
+              line.dropFirst(hashes.count).first == " " else { return nil }
+        let text = String(line.dropFirst(hashes.count)).trimmingCharacters(in: .whitespaces)
+        let font: Font
+        switch hashes.count {
+        case 1: font = .title2.weight(.bold)
+        case 2: font = .title3.weight(.bold)
+        default: font = .headline.weight(.semibold)
+        }
+        return (text, font)
+    }
+
+    private func listContent(from line: String) -> (marker: String, text: String, indent: CGFloat)? {
+        for marker in ["- ", "* ", "+ "] where line.hasPrefix(marker) {
+            return ("•", String(line.dropFirst(marker.count)), 0)
+        }
+        var digits = ""
+        for character in line {
+            guard character.isNumber else { break }
+            digits.append(character)
+        }
+        guard !digits.isEmpty, line.dropFirst(digits.count).hasPrefix(". ") else { return nil }
+        return (digits + ".", String(line.dropFirst(digits.count + 2)), 0)
+    }
+
+    private func inlineText(_ source: String) -> Text {
+        var result = Text("")
+        var remaining = source[...]
+        while !remaining.isEmpty {
+            let markers = ["**", "*", "`"]
+            guard let next = markers.compactMap({ marker in
+                remaining.range(of: marker).map { (range: $0, marker: marker) }
+            }).min(by: { $0.range.lowerBound < $1.range.lowerBound }) else {
+                result = result + Text(String(remaining))
+                break
+            }
+            if next.range.lowerBound > remaining.startIndex {
+                result = result + Text(String(remaining[..<next.range.lowerBound]))
+            }
+            let afterMarker = remaining[next.range.upperBound...]
+            guard let closing = afterMarker.range(of: next.marker) else {
+                result = result + Text(String(remaining[next.range.lowerBound...]))
+                break
+            }
+            let content = String(afterMarker[..<closing.lowerBound])
+            switch next.marker {
+            case "**": result = result + Text(content).bold()
+            case "*": result = result + Text(content).italic()
+            default: result = result + Text(content).font(.system(.body, design: .monospaced))
+            }
+            remaining = afterMarker[closing.upperBound...]
+        }
+        return result
+    }
 }
