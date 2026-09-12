@@ -161,15 +161,12 @@ private struct NoteAttachmentView: View {
         case let .text(label, url):
             TextAttachmentView(label: label, url: url)
         case let .pdf(label, url):
-            PDFKitView(url: url)
-                .frame(maxWidth: 720, minHeight: 420)
-                .overlay(alignment: .topLeading) {
-                    Text(label)
-                        .font(.caption)
-                        .padding(6)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5))
-                        .padding(8)
-                }
+            VStack(alignment: .leading, spacing: 8) {
+                AttachmentHeader(label: label, icon: "doc.richtext", url: url)
+                PDFKitView(url: url)
+                    .frame(maxWidth: .infinity, minHeight: 420, maxHeight: 800)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
         case let .file(label, url):
             GenericAttachmentView(label: label, url: url)
         }
@@ -206,22 +203,43 @@ private struct TextAttachmentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label(label, systemImage: "doc.text")
-                .font(.headline)
+            AttachmentHeader(label: label, icon: "doc.text", url: url)
             if let contents = try? String(contentsOf: url, encoding: .utf8) {
-                ScrollView(.horizontal) {
+                ScrollView([.horizontal, .vertical]) {
                     Text(contents)
                         .font(.system(.body, design: .monospaced))
                         .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: true, vertical: false)
                         .padding(12)
                 }
-                .frame(maxHeight: 300)
+                .frame(maxWidth: .infinity, minHeight: 420, maxHeight: 800)
                 .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
             } else {
                 Text("This text file could not be decoded as UTF-8.")
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+}
+
+private struct AttachmentHeader: View {
+    let label: String
+    let icon: String
+    let url: URL
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Label(label, systemImage: icon)
+                .font(.headline)
+                .lineLimit(1)
+            Spacer()
+            Button {
+                NSWorkspace.shared.open(url)
+            } label: {
+                Label("Open externally", systemImage: "arrow.up.right.square")
+            }
+            .buttonStyle(.borderless)
+            .help("Open in the default app")
         }
     }
 }
