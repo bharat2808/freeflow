@@ -33,6 +33,13 @@ SHELL_SCRIPTS = $(shell find .github/scripts .agents/skills -name '*.sh' -type f
 YAML_FILES = $(shell find .github -type f \( -name '*.yml' -o -name '*.yaml' \) | LC_ALL=C sort)
 RESOURCES = $(CONTENTS)/Resources
 ARCH ?= $(shell uname -m)
+MARKDOWNUI_BUILD_DIR = .build/$(ARCH)-apple-macosx/debug
+MARKDOWNUI_ARCHIVE = $(BUILD_DIR)/libMarkdownUI-$(ARCH).a
+ifeq ($(ARCH),universal)
+MARKDOWNUI_REQUIRED_ARCHIVES = $(BUILD_DIR)/libMarkdownUI-arm64.a $(BUILD_DIR)/libMarkdownUI-x86_64.a
+else
+MARKDOWNUI_REQUIRED_ARCHIVES = $(MARKDOWNUI_ARCHIVE)
+endif
 
 # Pick the icon source based on which bundle we are building. Dev builds get
 # a distinct hammer-on-waveform icon so a developer's dock shows at a glance
@@ -45,25 +52,27 @@ ICON_SOURCE = Resources/AppIcon-Source.png
 ICON_ICNS = Resources/AppIcon.icns
 endif
 
-.PHONY: all check clean run icon dmg codesign-dmg notarize test typecheck validate
+.PHONY: all check clean run icon dmg codesign-dmg notarize test typecheck validate markdownui
 
 all: $(APP_EXECUTABLE_TARGET)
 
-$(APP_EXECUTABLE_TARGET): $(SOURCES) $(WHISPER_BRIDGE_OBJECT) Info.plist $(ICON_ICNS)
+$(APP_EXECUTABLE_TARGET): $(SOURCES) $(WHISPER_BRIDGE_OBJECT) $(MARKDOWNUI_REQUIRED_ARCHIVES) Info.plist $(ICON_ICNS)
 	@mkdir -p "$(MACOS_DIR)" "$(RESOURCES)"
 ifeq ($(ARCH),universal)
-	swiftc \
+		swiftc \
 		-parse-as-library \
 		-o "$(MACOS_DIR)/$(APP_NAME)-arm64" \
 		-sdk $(shell xcrun --show-sdk-path) \
 		-target arm64-apple-macosx13.0 \
-		$(SOURCES)
+		-I ".build/arm64-apple-macosx/debug/Modules" \
+		$(SOURCES) "$(BUILD_DIR)/libMarkdownUI-arm64.a"
 	swiftc \
 		-parse-as-library \
 		-o "$(MACOS_DIR)/$(APP_NAME)-x86_64" \
 		-sdk $(shell xcrun --show-sdk-path) \
 		-target x86_64-apple-macosx13.0 \
-		$(SOURCES) $(WHISPER_BRIDGE_OBJECT)
+		-I ".build/x86_64-apple-macosx/debug/Modules" \
+		$(SOURCES) $(WHISPER_BRIDGE_OBJECT) "$(BUILD_DIR)/libMarkdownUI-x86_64.a"
 	lipo -create -output "$(MACOS_DIR)/$(APP_NAME)" \
 		"$(MACOS_DIR)/$(APP_NAME)-arm64" \
 		"$(MACOS_DIR)/$(APP_NAME)-x86_64"
@@ -74,7 +83,8 @@ else
 		-o "$(MACOS_DIR)/$(APP_NAME)" \
 		-sdk $(shell xcrun --show-sdk-path) \
 		-target $(ARCH)-apple-macosx13.0 \
-		$(SOURCES) $(WHISPER_BRIDGE_OBJECT)
+		-I "$(MARKDOWNUI_BUILD_DIR)/Modules" \
+		$(SOURCES) $(WHISPER_BRIDGE_OBJECT) "$(MARKDOWNUI_ARCHIVE)"
 endif
 	@cp Info.plist "$(CONTENTS)/"
 	@plutil -replace CFBundleName -string "$(APP_NAME)" "$(CONTENTS)/Info.plist"
@@ -91,13 +101,22 @@ endif
 check: typecheck test validate
 
 typecheck:
+	swift build --target MarkdownUIBridge --disable-sandbox
 	swiftc \
 		-parse-as-library \
 		-typecheck \
 		-warnings-as-errors \
 		-sdk $(shell xcrun --show-sdk-path) \
 		-target $(ARCH)-apple-macosx13.0 \
+		-I "$(MARKDOWNUI_BUILD_DIR)/Modules" \
 		$(SOURCES)
+
+markdownui: $(MARKDOWNUI_REQUIRED_ARCHIVES)
+
+$(BUILD_DIR)/libMarkdownUI-%.a: Package.swift Sources/PackageSupport/PackageSupport.swift
+	@mkdir -p "$(BUILD_DIR)"
+	swift build --target MarkdownUIBridge --arch "$*" --disable-sandbox
+	@libtool -static -o "$@" $$(find ".build/$*-apple-macosx/debug" -type f -name '*.o' ! -path '*/MarkdownUIBridge.build/*' | LC_ALL=C sort)
 
 test: $(WHISPER_BRIDGE_OBJECT)
 	@mkdir -p "$(BUILD_DIR)"
