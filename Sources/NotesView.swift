@@ -290,13 +290,15 @@ struct NotesView: View {
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
                                 .padding(.vertical, 8)
-                                .contentShape(Rectangle())
-                                .onDrag {
-                                    NSItemProvider(object: note.id.uuidString as NSString)
-                                }
                         }
                         .padding(.vertical, 5)
+                        .contentShape(Rectangle())
                         .tag(note.id)
+                        .draggable(note.id.uuidString) {
+                            Label(note.title, systemImage: "note.text")
+                                .padding(8)
+                                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                        }
                         .contextMenu {
                             Button {
                                 library.selectedID = note.id
