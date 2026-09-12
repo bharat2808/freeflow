@@ -452,10 +452,17 @@ private extension Data {
 /// is transcribed again after stop, so preview latency never changes the
 /// authoritative note contents.
 final class LocalWhisperPreviewSession: @unchecked Sendable {
+    private struct PreviewSnapshot {
+        let audio: Data
+        let startsAfterRecordingBeginning: Bool
+    }
+
     private let transcribe: @Sendable (Data, Int) async throws -> String
     private let onUpdate: @Sendable (String) -> Void
     private let stateLock = OSAllocatedUnfairLock(initialState: ())
     private var audio = Data()
+    private var pendingPreviewBytes = 0
+    private var hasDroppedAudio = false
     private var committedTranscript = ""
     private var stopped = false
     private var workerRunning = false
@@ -478,13 +485,15 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
         let shouldStartWorker = stateLock.withLock { () -> Bool in
             guard !stopped else { return false }
             audio.append(samples)
+            pendingPreviewBytes += samples.count
             let bytesPerFrame = MemoryLayout<Int16>.size
             let maxBytes = maxBufferedFrames * bytesPerFrame
             if audio.count > maxBytes {
                 audio.removeFirst(audio.count - maxBytes)
+                hasDroppedAudio = true
             }
             let chunkBytes = chunkFrames * bytesPerFrame
-            guard !workerRunning, audio.count >= chunkBytes else { return false }
+            guard !workerRunning, pendingPreviewBytes >= chunkBytes else { return false }
             workerRunning = true
             return true
         }
@@ -508,22 +517,24 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
         }
     }
 
-    private func nextChunkLocked() -> Data? {
+    private func nextPreviewSnapshotLocked() -> PreviewSnapshot? {
         let chunkBytes = chunkFrames * MemoryLayout<Int16>.size
-        guard audio.count >= chunkBytes else { return nil }
-        let chunk = Data(audio.prefix(chunkBytes))
-        audio.removeFirst(chunkBytes)
-        return chunk
+        guard pendingPreviewBytes >= chunkBytes, audio.count >= chunkBytes else { return nil }
+        pendingPreviewBytes = 0
+        return PreviewSnapshot(
+            audio: audio,
+            startsAfterRecordingBeginning: hasDroppedAudio
+        )
     }
 
     private func drainAudio() async {
         while !Task.isCancelled {
-            let snapshot: Data? = stateLock.withLock {
+            let snapshot: PreviewSnapshot? = stateLock.withLock {
                 guard !stopped else {
                     workerRunning = false
                     return nil
                 }
-                return nextChunkLocked()
+                return nextPreviewSnapshotLocked()
             }
 
             guard let snapshot else {
@@ -542,20 +553,23 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
         }
     }
 
-    private func process(_ snapshot: Data) async {
+    private func process(_ snapshot: PreviewSnapshot) async {
         do {
             // Avoid invoking Whisper for clearly silent chunks.  This keeps
             // long recordings inexpensive while preserving the recorder's
             // complete audio for final transcription.
-            if containsSpeech(snapshot) {
-                let transcript = try await transcribe(snapshot, sampleRate)
+            if containsSpeech(snapshot.audio) {
+                let transcript = try await transcribe(snapshot.audio, sampleRate)
                 try Task.checkCancellation()
                 if !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     let committed: String = stateLock.withLock {
-                        if committedTranscript.isEmpty {
-                            committedTranscript = transcript
+                        if snapshot.startsAfterRecordingBeginning {
+                            committedTranscript = MarkdownNoteStore.mergeTranscripts([
+                                committedTranscript,
+                                transcript,
+                            ])
                         } else {
-                            committedTranscript += " " + transcript
+                            committedTranscript = transcript
                         }
                         return committedTranscript
                     }
