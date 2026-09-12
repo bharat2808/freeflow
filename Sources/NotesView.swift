@@ -277,13 +277,28 @@ final class NotesLibrary: ObservableObject {
     func revealFiles() { NSWorkspace.shared.open(store.directory) }
 }
 
-private struct NotesHeaderIconButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+private struct NotesHeaderIconControl: View {
+    let systemName: String
+    var tint: Color?
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(
+                isEnabled
+                    ? (tint ?? Color(nsColor: .labelColor))
+                    : Color(nsColor: .disabledControlTextColor)
+            )
+            .frame(width: 18, height: 18)
             .frame(width: 40, height: 32)
             .background(
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(configuration.isPressed ? Color.accentColor.opacity(0.25) : Color(nsColor: .controlBackgroundColor))
+                    .fill(
+                        isEnabled
+                            ? Color(nsColor: .controlBackgroundColor)
+                            : Color(nsColor: .underPageBackgroundColor).opacity(0.7)
+                    )
             )
     }
 }
@@ -695,9 +710,9 @@ struct NotesView: View {
             Button {
                 library.undoSelectedNote()
             } label: {
-                noteHeaderIcon("arrow.uturn.backward")
+                NotesHeaderIconControl(systemName: "arrow.uturn.backward")
             }
-            .buttonStyle(NotesHeaderIconButtonStyle())
+            .buttonStyle(.plain)
             .disabled(!library.canUndoSelectedNote)
             .accessibilityLabel("Undo")
             .help("Undo the last note edit")
@@ -713,37 +728,25 @@ struct NotesView: View {
                     Label("Append", systemImage: "text.append")
                 }
             } label: {
-                noteHeaderIcon("wand.and.stars")
+                NotesHeaderIconControl(systemName: "wand.and.stars")
             }
             .menuStyle(.borderlessButton)
             .disabled(appState.isRecording || appState.isTranscribing)
             .accessibilityLabel("Note actions")
             .help("Update or append to this note")
             .menuIndicator(.hidden)
-            .frame(width: 40, height: 32)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(nsColor: .controlBackgroundColor))
-            )
             Button {
                 preview.toggle()
             } label: {
-                noteHeaderIcon("eye")
+                NotesHeaderIconControl(systemName: "eye", tint: preview ? .accentColor : nil)
             }
-            .buttonStyle(NotesHeaderIconButtonStyle())
-            .foregroundStyle(preview ? Color.accentColor : Color(nsColor: .labelColor))
+            .buttonStyle(.plain)
             .accessibilityLabel("Preview")
             .help("Toggle Markdown preview")
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
         .background(.quaternary.opacity(0.35))
-    }
-
-    private func noteHeaderIcon(_ systemName: String) -> some View {
-        Image(systemName: systemName)
-            .font(.system(size: 16, weight: .semibold))
-            .frame(width: 18, height: 18)
     }
 
     private func noteRow(_ note: MarkdownNote) -> some View {
