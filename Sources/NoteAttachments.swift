@@ -151,7 +151,7 @@ private struct NoteAttachmentView: View {
             }
         case let .video(label, url):
             VStack(alignment: .leading, spacing: 6) {
-                VideoPlayer(player: AVPlayer(url: url))
+                NativeVideoView(url: url)
                     .frame(maxWidth: 720, minHeight: 240)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                 Text(label).font(.caption).foregroundStyle(.secondary)
@@ -173,6 +173,30 @@ private struct NoteAttachmentView: View {
         case let .file(label, url):
             GenericAttachmentView(label: label, url: url)
         }
+    }
+}
+
+private struct NativeVideoView: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.controlsStyle = .floating
+        view.player = AVPlayer(url: url)
+        return view
+    }
+
+    func updateNSView(_ nsView: AVPlayerView, context: Context) {
+        if nsView.player?.currentItem?.asset as? AVURLAsset == nil ||
+            (nsView.player?.currentItem?.asset as? AVURLAsset)?.url != url {
+            nsView.player?.pause()
+            nsView.player = AVPlayer(url: url)
+        }
+    }
+
+    static func dismantleNSView(_ nsView: AVPlayerView, coordinator: ()) {
+        nsView.player?.pause()
+        nsView.player = nil
     }
 }
 
