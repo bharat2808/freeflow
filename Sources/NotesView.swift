@@ -467,6 +467,7 @@ struct NotesView: View {
                         replacementText: replacement,
                         title: "Custom change"
                     )
+                    customTextPrompt = ""
                     isPresetProcessing = false
                     showTextPresetPopover = false
                 }
