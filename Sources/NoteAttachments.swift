@@ -16,8 +16,15 @@ struct NoteMarkdownPreview: View {
             ForEach(Array(markdown.components(separatedBy: "\n\n").enumerated()), id: \.offset) { _, block in
                 if let attachment = attachment(in: block) {
                     NoteAttachmentView(attachment: attachment)
+                } else if let webLink = webLink(in: block) {
+                    ExternalLinkView(label: webLink.label, url: webLink.url)
                 } else if !block.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Markdown(block, baseURL: store.noteFolderURL(for: note))
+                        .markdownTheme(.gitHub)
+                        .environment(\.openURL, OpenURLAction { url in
+                            NSWorkspace.shared.open(url)
+                            return .handled
+                        })
                 }
             }
         }
@@ -44,6 +51,47 @@ struct NoteMarkdownPreview: View {
         if type?.conforms(to: .pdf) == true { return .pdf(label, url) }
         if type?.conforms(to: .text) == true { return .text(label, url) }
         return .file(label, url)
+    }
+
+    private func webLink(in block: String) -> (label: String, url: URL)? {
+        let value = block.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.hasPrefix("["), value.last == ")",
+              let close = value.firstIndex(of: "]"),
+              value.index(after: close) < value.endIndex,
+              value[value.index(after: close)] == "(",
+              let urlEnd = value.lastIndex(of: ")") else { return nil }
+        let label = String(value[value.index(after: value.startIndex)..<close])
+        let urlStart = value.index(close, offsetBy: 2)
+        guard urlStart < urlEnd,
+              let url = URL(string: String(value[urlStart..<urlEnd])),
+              url.scheme == "http" || url.scheme == "https" else { return nil }
+        return (label, url)
+    }
+}
+
+private struct ExternalLinkView: View {
+    let label: String
+    let url: URL
+    @State private var isHovered = false
+
+    var body: some View {
+        Button {
+            NSWorkspace.shared.open(url)
+        } label: {
+            HStack(spacing: 6) {
+                Text(label)
+                    .underline()
+                Image(systemName: "arrow.up.right")
+                    .font(.caption.weight(.semibold))
+                    .opacity(isHovered ? 1 : 0.45)
+                    .offset(x: isHovered ? 2 : 0)
+            }
+            .foregroundStyle(.tint)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help("Open in browser")
     }
 }
 
