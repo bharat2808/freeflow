@@ -187,6 +187,7 @@ struct NotesView: View {
     @State private var renameFolderName = ""
     @State private var selectedFolderForRename: String?
     @State private var showDeleteConfirmation = false
+    @State private var expandedDateGroups: Set<String> = []
 
     private var selectedNoteFolder: String? {
         guard let selectedID = library.selectedID else { return nil }
@@ -252,9 +253,24 @@ struct NotesView: View {
                         let folderNotes = notes(in: folder)
                         Section {
                             ForEach(dateGroups(for: folderNotes), id: \.0) { dateTitle, dateNotes in
+                                let groupKey = "\(folder)|\(dateTitle)"
+                                let isExpanded = expandedDateGroups.contains(groupKey)
+                                let displayedNotes = isExpanded ? dateNotes : Array(dateNotes.prefix(5))
                                 Section(dateTitle) {
-                                    ForEach(dateNotes) { note in
+                                    ForEach(displayedNotes) { note in
                                         noteRow(note)
+                                    }
+                                    if dateNotes.count > 5 {
+                                        Button(isExpanded ? "Show less" : "Show more") {
+                                            if isExpanded {
+                                                expandedDateGroups.remove(groupKey)
+                                            } else {
+                                                expandedDateGroups.insert(groupKey)
+                                            }
+                                        }
+                                        .buttonStyle(.plain)
+                                        .foregroundStyle(.secondary)
+                                        .padding(.vertical, 4)
                                     }
                                 }
                             }
