@@ -684,9 +684,11 @@ struct NotesView: View {
             Button {
                 library.undoSelectedNote()
             } label: {
-                Label("Undo", systemImage: "arrow.uturn.backward")
+                Image(systemName: "arrow.uturn.backward")
+                    .frame(minWidth: 24, minHeight: 24)
             }
             .disabled(!library.canUndoSelectedNote)
+            .accessibilityLabel("Undo")
             .help("Undo the last note edit")
             Button {
                 appState.startNoteUpdate(noteID: note.id)
@@ -701,9 +703,12 @@ struct NotesView: View {
             }
             .disabled(appState.isRecording || appState.isTranscribing)
             Toggle(isOn: $preview) {
-                Label("Preview", systemImage: "eye")
+                Image(systemName: "eye")
+                    .frame(minWidth: 24, minHeight: 24)
             }
             .toggleStyle(.button)
+            .accessibilityLabel("Preview")
+            .help("Toggle Markdown preview")
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
