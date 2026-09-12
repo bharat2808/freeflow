@@ -3053,11 +3053,15 @@ final class AppState: ObservableObject, @unchecked Sendable {
             """
         case .append:
             updatePrompt = basePrompt + "\n\n" + """
-            Append the spoken transcription to the end of the existing Markdown note.
-            Return only the complete updated Markdown note. Preserve all existing content exactly
-            unless required to add the new material. Format only the new material as Markdown and
-            do not summarize, omit, or invent content.
-            """
+Append the spoken transcription to the end of the existing Markdown note.
+Return only the complete updated Markdown note. Preserve all existing content exactly
+unless required to add the new material. Format only the new material as Markdown and
+do not summarize, omit, or invent content. Preserve every existing attachment reference
+exactly, including its Markdown syntax, label, relative path, folder name, filename, and
+extension. Never convert attachment references to absolute paths, plain text, or shortened
+filenames. Keep each attachment on its own line with a blank line before and after it.
+Separate newly appended attachments and text from the existing note with blank lines.
+"""
             updateInput = """
             EXISTING_MARKDOWN_NOTE:
             <note>
