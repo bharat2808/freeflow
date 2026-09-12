@@ -41,8 +41,7 @@ class TranscriptionService: AudioTranscriber {
         self.apiKey = apiKey
         self.baseURL = try Self.normalizedBaseURL(from: baseURL)
         let trimmedModel = transcriptionModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedModel = trimmedModel.isEmpty ? "whisper-large-v3" : trimmedModel
-        self.transcriptionModel = Self.providerQualifiedModel(resolvedModel, baseURL: self.baseURL)
+        self.transcriptionModel = trimmedModel.isEmpty ? "whisper-large-v3" : trimmedModel
         let trimmedLanguage = language?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.language = (trimmedLanguage?.isEmpty == false) ? trimmedLanguage : nil
         self.timeoutSecondsOverride = timeoutSecondsOverride
@@ -51,22 +50,6 @@ class TranscriptionService: AudioTranscriber {
     static func responseFormat(forModel model: String) -> String {
         let normalizedModel = model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return modelsSupportingVerboseJSON.contains(normalizedModel) ? "verbose_json" : "json"
-    }
-
-    private static func providerQualifiedModel(_ model: String, baseURL: URL) -> String {
-        guard let host = baseURL.host?.lowercased(), host == "openrouter.ai" || host.hasSuffix(".openrouter.ai") else {
-            return model
-        }
-        switch model.lowercased() {
-        case "whisper-1":
-            return "openai/whisper-1"
-        case "whisper-large-v3":
-            return "openai/whisper-large-v3"
-        case "whisper-large-v3-turbo":
-            return "openai/whisper-large-v3-turbo"
-        default:
-            return model
-        }
     }
 
     // Validate API key by hitting a lightweight endpoint

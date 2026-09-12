@@ -1,7 +1,4 @@
 import Foundation
-import os.log
-
-private let postProcessingLog = OSLog(subsystem: "com.zachlatta.freeflow", category: "PostProcessing")
 
 enum PostProcessingError: LocalizedError {
     case requestFailed(Int, String)
@@ -151,13 +148,6 @@ Behavior:
         // default. This lets note processing keep its longer 120s fallback
         // while still allowing users to cap a slow provider explicitly.
         return override > 0 ? override : (timeoutSecondsOverride ?? 20)
-    }
-
-    private var supportsReasoningControls: Bool {
-        guard let host = URL(string: baseURL)?.host?.lowercased() else { return false }
-        return host == "api.groq.com"
-            || host == "openrouter.ai"
-            || host.hasSuffix(".openrouter.ai")
     }
 
     init(
@@ -490,17 +480,6 @@ Behavior:
         customSystemPrompt: String = "",
         outputLanguage: String = ""
     ) async throws -> PostProcessingResult {
-        let startedAt = CFAbsoluteTimeGetCurrent()
-        defer {
-            os_log(
-                .info,
-                log: postProcessingLog,
-                "LLM request finished model=%{public}@ transcriptChars=%d elapsed=%.0fms",
-                model,
-                transcript.count,
-                (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
-            )
-        }
         var request = URLRequest(url: URL(string: "\(baseURL)/chat/completions")!)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -570,17 +549,15 @@ Model: \(model)
         } else if model == defaultModel {
             payload["max_completion_tokens"] = postProcessingMaxCompletionTokens
         }
-        if supportsReasoningControls {
-            if let effort = config.reasoningEffort {
-                payload["reasoning_effort"] = effort
-            } else if model == defaultModel {
-                payload["reasoning_effort"] = defaultModelReasoningEffort
-            }
-            if let include = config.includeReasoning {
-                payload["include_reasoning"] = include
-            } else if model == defaultModel {
-                payload["include_reasoning"] = false
-            }
+        if let effort = config.reasoningEffort {
+            payload["reasoning_effort"] = effort
+        } else if model == defaultModel {
+            payload["reasoning_effort"] = defaultModelReasoningEffort
+        }
+        if let include = config.includeReasoning {
+            payload["include_reasoning"] = include
+        } else if model == defaultModel {
+            payload["include_reasoning"] = false
         }
 
         request.httpBody = try JSONSerialization.data(withJSONObject: payload, options: [])
@@ -712,17 +689,15 @@ Model: \(model)
         } else if model == defaultModel {
             payload["max_completion_tokens"] = postProcessingMaxCompletionTokens
         }
-        if supportsReasoningControls {
-            if let effort = config.reasoningEffort {
-                payload["reasoning_effort"] = effort
-            } else if model == defaultModel {
-                payload["reasoning_effort"] = defaultModelReasoningEffort
-            }
-            if let include = config.includeReasoning {
-                payload["include_reasoning"] = include
-            } else if model == defaultModel {
-                payload["include_reasoning"] = false
-            }
+        if let effort = config.reasoningEffort {
+            payload["reasoning_effort"] = effort
+        } else if model == defaultModel {
+            payload["reasoning_effort"] = defaultModelReasoningEffort
+        }
+        if let include = config.includeReasoning {
+            payload["include_reasoning"] = include
+        } else if model == defaultModel {
+            payload["include_reasoning"] = false
         }
 
         request.httpBody = try JSONSerialization.data(withJSONObject: payload, options: [])
@@ -869,17 +844,15 @@ Model: \(model)
         } else if model == defaultModel {
             payload["max_completion_tokens"] = postProcessingMaxCompletionTokens
         }
-        if supportsReasoningControls {
-            if let effort = config.reasoningEffort {
-                payload["reasoning_effort"] = effort
-            } else if model == defaultModel {
-                payload["reasoning_effort"] = defaultModelReasoningEffort
-            }
-            if let include = config.includeReasoning {
-                payload["include_reasoning"] = include
-            } else if model == defaultModel {
-                payload["include_reasoning"] = false
-            }
+        if let effort = config.reasoningEffort {
+            payload["reasoning_effort"] = effort
+        } else if model == defaultModel {
+            payload["reasoning_effort"] = defaultModelReasoningEffort
+        }
+        if let include = config.includeReasoning {
+            payload["include_reasoning"] = include
+        } else if model == defaultModel {
+            payload["include_reasoning"] = false
         }
 
         request.httpBody = try JSONSerialization.data(withJSONObject: payload, options: [])
