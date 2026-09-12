@@ -1898,6 +1898,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         noteUpdateTargetID = noteID
         noteVoiceAction = .update
         liveNoteTranscript = ""
+        pendingNoteRecording = true
         toggleRecording()
     }
 
@@ -1907,6 +1908,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         noteUpdateTargetID = noteID
         noteVoiceAction = .append
         liveNoteTranscript = ""
+        pendingNoteRecording = true
         toggleRecording()
     }
 
