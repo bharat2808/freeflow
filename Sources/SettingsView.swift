@@ -465,11 +465,7 @@ struct ProviderSettingsFields: View {
                 isOn: $appState.realtimeStreamingEnabled
             )
             .disabled(appState.transcriptionEngine == .localWhisper)
-            Text(
-                appState.transcriptionEngine == .localWhisper
-                    ? "Local Whisper automatically shows a live preview while you speak, then re-transcribes the complete recording after you stop."
-                    : "Streams audio through the provider's OpenAI-compatible /v1/realtime WebSocket so transcription runs while you speak."
-            )
+            Text("Streams audio through the provider's OpenAI-compatible /v1/realtime WebSocket so transcription runs while you speak.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

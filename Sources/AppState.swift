@@ -2504,9 +2504,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     func showAccessibilityAlert() {
         let alert = NSAlert()
         alert.messageText = "Accessibility Permission Required"
-        let bundleID = Bundle.main.bundleIdentifier ?? "unknown bundle"
-        let appPath = Bundle.main.bundleURL.path
-        alert.informativeText = "\(AppName.displayName) cannot type transcriptions without Accessibility access.\n\nGo to System Settings > Privacy & Security > Accessibility and enable \(AppName.displayName). Enable the entry for this build.\n\nBundle ID: \(bundleID)\nApp path: \(appPath)"
+        alert.informativeText = "\(AppName.displayName) cannot type transcriptions without Accessibility access.\n\nGo to System Settings > Privacy & Security > Accessibility and enable \(AppName.displayName)."
         alert.alertStyle = .critical
         alert.addButton(withTitle: "Open System Settings")
         alert.addButton(withTitle: "Dismiss")

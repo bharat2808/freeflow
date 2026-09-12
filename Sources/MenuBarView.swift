@@ -62,7 +62,7 @@ struct MenuBarView: View {
                 Button {
                     appState.requestScreenCapturePermission()
                 } label: {
-                    Label("Enable Screen Context (Optional)", systemImage: "camera.viewfinder")
+                    Label("Screen Recording Permission Needed", systemImage: "camera.viewfinder")
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.white)
