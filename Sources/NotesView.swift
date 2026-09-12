@@ -294,11 +294,8 @@ private struct NotesHeaderIconControl: View {
             .frame(width: 40, height: 32)
             .background(
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(
-                        isEnabled
-                            ? Color(nsColor: .controlBackgroundColor)
-                            : Color(nsColor: .underPageBackgroundColor).opacity(0.7)
-                    )
+                    .fill(Color(nsColor: .underPageBackgroundColor).opacity(0.7))
+                    .opacity(isEnabled ? 0 : 1)
             )
     }
 }
