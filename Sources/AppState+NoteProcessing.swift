@@ -19,9 +19,17 @@ private enum NoteProcessingRaceResult: Sendable {
 
 extension AppState {
     func processTextPreset(_ preset: TextActionPreset, text: String) async throws -> String {
+        try await processTextInstruction(preset.instruction, text: text)
+    }
+
+    func processTextInstruction(_ instruction: String, text: String) async throws -> String {
         let selectedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedInstruction = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !selectedText.isEmpty else {
             throw PostProcessingError.invalidInput("Select some note text first.")
+        }
+        guard !trimmedInstruction.isEmpty else {
+            throw PostProcessingError.invalidInput("Describe the change you want first.")
         }
 
         let context = AppContext(
@@ -52,7 +60,7 @@ Preserve every ATTACHMENT_N placeholder exactly as provided. These placeholders 
             transcript: protectedText.markdown,
             context: context,
             customVocabulary: customVocabulary,
-            customSystemPrompt: preset.instruction + attachmentPreservationPrompt,
+            customSystemPrompt: trimmedInstruction + attachmentPreservationPrompt,
             outputLanguage: outputLanguage
         )
         let processed = protectedText

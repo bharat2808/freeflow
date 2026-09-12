@@ -322,12 +322,13 @@ struct NotesView: View {
     @State private var isPresetProcessing = false
     @State private var presetError: String?
     @State private var textPresetPreview: TextPresetPreview?
+    @State private var customTextPrompt = ""
 
     private struct TextPresetPreview {
         let noteID: UUID
         let originalText: String
         let replacementText: String
-        let preset: TextActionPreset
+        let title: String
     }
 
     init(library: NotesLibrary, searchState: NotesSearchState) {
@@ -417,7 +418,43 @@ struct NotesView: View {
                         noteID: note.id,
                         originalText: selectedText,
                         replacementText: replacement,
-                        preset: preset
+                        title: preset.title
+                    )
+                    isPresetProcessing = false
+                    showTextPresetPopover = false
+                }
+            } catch {
+                await MainActor.run {
+                    presetError = error.localizedDescription
+                    isPresetProcessing = false
+                }
+            }
+        }
+    }
+
+    private func runCustomTextPrompt() {
+        guard !isPresetProcessing else { return }
+        guard let note = library.notes.first(where: { $0.id == library.selectedID }),
+              let selectedText = selectedText(in: note) else {
+            presetError = "Select text in the note before describing a change."
+            return
+        }
+        let prompt = customTextPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else {
+            presetError = "Describe the change you want first."
+            return
+        }
+        presetError = nil
+        isPresetProcessing = true
+        Task {
+            do {
+                let replacement = try await appState.processTextInstruction(prompt, text: selectedText)
+                await MainActor.run {
+                    textPresetPreview = TextPresetPreview(
+                        noteID: note.id,
+                        originalText: selectedText,
+                        replacementText: replacement,
+                        title: "Custom change"
                     )
                     isPresetProcessing = false
                     showTextPresetPopover = false
@@ -461,9 +498,10 @@ struct NotesView: View {
             HStack(spacing: 8) {
                 Image(systemName: "atom")
                     .foregroundStyle(.purple)
-                Text("Describe your change")
-                    .font(.headline)
-                    .foregroundStyle(.primary)
+                TextField("Describe your change", text: $customTextPrompt, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...3)
+                    .onSubmit { runCustomTextPrompt() }
                 Spacer()
             }
             .padding(.horizontal, 12)
@@ -472,6 +510,9 @@ struct NotesView: View {
             Text("Select note text, then choose a preset to transform it without recording audio.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Button("Apply custom change") { runCustomTextPrompt() }
+                .buttonStyle(.borderedProminent)
+                .disabled(isPresetProcessing || customTextPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             HStack(spacing: 10) {
                 presetButton(.proofread)
                 presetButton(.rewrite)
@@ -793,7 +834,7 @@ struct NotesView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Preview (preview.preset.title.lowercased())")
+                    Text("Preview (preview.title.lowercased())")
                         .font(.title2.weight(.semibold))
                     Text("Review the selected-text replacement before applying it.")
                         .font(.caption)
@@ -816,7 +857,7 @@ struct NotesView: View {
                     Text(preview.originalText)
                         .textSelection(.enabled)
                     Divider()
-                    Text("\(preview.preset.title) result")
+                    Text("\(preview.title) result")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     Markdown(preview.replacementText, baseURL: MarkdownNoteStore.standard.noteFolderURL(for: note))
