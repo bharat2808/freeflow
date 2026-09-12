@@ -281,6 +281,7 @@ private struct NotesHeaderIconControl: View {
     let systemName: String
     var tint: Color?
     var iconPointSize: CGFloat = 16
+    var iconFrameSize: CGFloat = 18
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
@@ -291,7 +292,7 @@ private struct NotesHeaderIconControl: View {
                     ? (tint ?? Color(nsColor: .labelColor))
                     : Color(nsColor: .disabledControlTextColor)
             )
-            .frame(width: 18, height: 18)
+            .frame(width: iconFrameSize, height: iconFrameSize)
             .frame(width: 40, height: 32)
             .background(
                 RoundedRectangle(cornerRadius: 8)
@@ -715,7 +716,7 @@ struct NotesView: View {
                     Label("Append", systemImage: "text.append")
                 }
             } label: {
-                NotesHeaderIconControl(systemName: "wand.and.stars", iconPointSize: 18)
+                NotesHeaderIconControl(systemName: "wand.and.stars", iconPointSize: 30, iconFrameSize: 30)
             }
             .menuStyle(.borderlessButton)
             .disabled(appState.isRecording || appState.isTranscribing)
