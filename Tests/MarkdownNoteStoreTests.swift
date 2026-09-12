@@ -30,6 +30,7 @@ enum MarkdownNoteStoreTests {
             try Data([0x89, 0x50, 0x4E, 0x47]).write(to: sourceAttachment)
             let attachmentPath = try store.importAttachment(from: sourceAttachment, for: note)
             TestSupport.expect(FileManager.default.fileExists(atPath: store.attachmentURL(for: note, relativePath: attachmentPath)!.path), "Imported attachments must be stored beside their note")
+            TestSupport.expect(!store.loadFolders().contains(note.id.uuidString), "Note attachment directories must not appear as folders")
             let folderNote = MarkdownNote(id: UUID(), markdown: "# Folder note", modified: Date(), folder: "Projects/Ideas")
             try store.save(folderNote)
             let folderAttachment = try store.importAttachment(from: sourceAttachment, for: folderNote)
