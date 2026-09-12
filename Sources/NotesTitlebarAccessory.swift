@@ -6,6 +6,8 @@ final class NotesSearchState: ObservableObject {
 }
 
 final class NotesTitlebarAccessoryViewController: NSTitlebarAccessoryViewController {
+    static let accessorySize = NSSize(width: 360, height: 32)
+
     private let searchState: NotesSearchState
     private let library: NotesLibrary
     private let searchField = NSSearchField()
@@ -24,12 +26,18 @@ final class NotesTitlebarAccessoryViewController: NSTitlebarAccessoryViewControl
         searchField.target = self
         searchField.action = #selector(searchChanged(_:))
         searchField.stringValue = searchState.text
+        searchField.controlSize = .large
+        searchField.font = .systemFont(ofSize: 14)
         searchField.translatesAutoresizingMaskIntoConstraints = false
 
         let moreButton = NSButton(image: NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "More")!,
                                   target: self, action: #selector(showMore(_:)))
         moreButton.bezelStyle = .texturedRounded
         moreButton.isBordered = false
+        moreButton.controlSize = .large
+        moreButton.image = moreButton.image?.withSymbolConfiguration(
+            NSImage.SymbolConfiguration(pointSize: 17, weight: .regular)
+        )
         moreButton.translatesAutoresizingMaskIntoConstraints = false
 
         let stack = NSStackView(views: [searchField, moreButton])
@@ -44,11 +52,11 @@ final class NotesTitlebarAccessoryViewController: NSTitlebarAccessoryViewControl
             stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             stack.topAnchor.constraint(equalTo: container.topAnchor),
             stack.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            searchField.widthAnchor.constraint(equalToConstant: 260),
-            moreButton.widthAnchor.constraint(equalToConstant: 28)
+            searchField.widthAnchor.constraint(equalToConstant: 320),
+            moreButton.widthAnchor.constraint(equalToConstant: 32)
         ])
         view = container
-        preferredContentSize = NSSize(width: 296, height: 28)
+        preferredContentSize = Self.accessorySize
     }
 
     @objc private func searchChanged(_ sender: NSSearchField) {
