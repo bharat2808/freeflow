@@ -18,6 +18,45 @@ private enum NoteProcessingRaceResult: Sendable {
 }
 
 extension AppState {
+    func processTextPreset(_ preset: TextActionPreset, text: String) async throws -> String {
+        let selectedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !selectedText.isEmpty else {
+            throw PostProcessingError.invalidInput("Select some note text first.")
+        }
+
+        let context = AppContext(
+            appName: nil,
+            bundleIdentifier: nil,
+            windowTitle: nil,
+            selectedText: selectedText,
+            currentActivity: "Editing a Markdown note.",
+            contextSystemPrompt: nil,
+            contextPrompt: nil,
+            screenshotDataURL: nil,
+            screenshotMimeType: nil,
+            screenshotError: nil
+        )
+        let service = PostProcessingService(
+            apiKey: apiKey,
+            baseURL: apiBaseURL,
+            preferredModel: postProcessingModel,
+            preferredFallbackModel: postProcessingFallbackModel,
+            instructionExecutionGuardEnabled: instructionExecutionGuardEnabled
+        )
+        let result = try await service.postProcess(
+            transcript: selectedText,
+            context: context,
+            customVocabulary: customVocabulary,
+            customSystemPrompt: preset.instruction,
+            outputLanguage: outputLanguage
+        )
+        let processed = result.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !processed.isEmpty else {
+            throw PostProcessingError.emptyOutput
+        }
+        return processed
+    }
+
     func processNoteTranscript(
         _ rawTranscript: String,
         context: AppContext,

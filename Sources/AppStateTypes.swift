@@ -47,6 +47,51 @@ enum NoteVoiceAction: Sendable, Equatable {
     case append
 }
 
+enum TextActionPreset: String, CaseIterable, Identifiable, Sendable {
+    case proofread
+    case rewrite
+    case friendly
+    case professional
+    case concise
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .proofread: return "Proofread"
+        case .rewrite: return "Rewrite"
+        case .friendly: return "Friendly"
+        case .professional: return "Professional"
+        case .concise: return "Concise"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .proofread: return "text.magnifyingglass"
+        case .rewrite: return "pencil.and.outline"
+        case .friendly: return "face.smiling"
+        case .professional: return "briefcase"
+        case .concise: return "arrow.down.left.and.arrow.up.right"
+        }
+    }
+
+    var instruction: String {
+        switch self {
+        case .proofread:
+            return "Proofread the selected text. Correct grammar, spelling, punctuation, and obvious typos while preserving the meaning, structure, and tone. Return only the corrected text."
+        case .rewrite:
+            return "Rewrite the selected text for clarity and flow while preserving its meaning and important details. Return only the rewritten text."
+        case .friendly:
+            return "Rewrite the selected text in a warm, friendly, conversational tone while preserving its meaning and important details. Return only the rewritten text."
+        case .professional:
+            return "Rewrite the selected text in a clear, polished, professional tone while preserving its meaning and important details. Return only the rewritten text."
+        case .concise:
+            return "Make the selected text more concise without losing important meaning, facts, or requested actions. Return only the concise version."
+        }
+    }
+}
+
 struct PendingNoteUpdate: Identifiable {
     let id = UUID()
     let noteID: UUID

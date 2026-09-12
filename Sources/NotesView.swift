@@ -318,6 +318,17 @@ struct NotesView: View {
     @State private var selectedFolderForDelete: String?
     @State private var expandedFolders: Set<String> = []
     @State private var collapsedFolders: Set<String> = []
+    @State private var showTextPresetPopover = false
+    @State private var isPresetProcessing = false
+    @State private var presetError: String?
+    @State private var textPresetPreview: TextPresetPreview?
+
+    private struct TextPresetPreview {
+        let noteID: UUID
+        let originalText: String
+        let replacementText: String
+        let preset: TextActionPreset
+    }
 
     init(library: NotesLibrary, searchState: NotesSearchState) {
         self.library = library
@@ -380,6 +391,156 @@ struct NotesView: View {
         let live = appState.liveNoteTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         if !live.isEmpty { return live }
         return appState.lastRawTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func selectedText(in note: MarkdownNote) -> String? {
+        let source = note.markdown as NSString
+        let location = min(max(editorSelection.location, 0), source.length)
+        let length = min(max(editorSelection.length, 0), source.length - location)
+        guard length > 0 else { return nil }
+        return source.substring(with: NSRange(location: location, length: length))
+    }
+
+    private func runTextPreset(_ preset: TextActionPreset, for note: MarkdownNote) {
+        guard !isPresetProcessing else { return }
+        guard let selectedText = selectedText(in: note) else {
+            presetError = "Select text in the note before choosing a preset."
+            return
+        }
+        presetError = nil
+        isPresetProcessing = true
+        Task {
+            do {
+                let replacement = try await appState.processTextPreset(preset, text: selectedText)
+                await MainActor.run {
+                    textPresetPreview = TextPresetPreview(
+                        noteID: note.id,
+                        originalText: selectedText,
+                        replacementText: replacement,
+                        preset: preset
+                    )
+                    isPresetProcessing = false
+                    showTextPresetPopover = false
+                }
+            } catch {
+                await MainActor.run {
+                    presetError = error.localizedDescription
+                    isPresetProcessing = false
+                }
+            }
+        }
+    }
+
+    private func applyTextPresetPreview(_ preview: TextPresetPreview) {
+        guard let note = library.notes.first(where: { $0.id == preview.noteID }) else {
+            presetError = "The note is no longer available."
+            return
+        }
+        let source = note.markdown as NSString
+        let location = min(max(editorSelection.location, 0), source.length)
+        let length = min(max(editorSelection.length, 0), source.length - location)
+        guard source.substring(with: NSRange(location: location, length: length)) == preview.originalText else {
+            presetError = "The note changed while the preset was running. Please select the text again."
+            return
+        }
+        let updated = source.replacingCharacters(
+            in: NSRange(location: location, length: length),
+            with: preview.replacementText
+        )
+        library.edit(id: preview.noteID, markdown: updated)
+        editorSelection = NSRange(
+            location: location,
+            length: (preview.replacementText as NSString).length
+        )
+        textPresetPreview = nil
+        presetError = nil
+    }
+
+    private var textPresetPopover: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: "atom")
+                    .foregroundStyle(.purple)
+                Text("Describe your change")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 12))
+            Text("Select note text, then choose a preset to transform it without recording audio.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                presetButton(.proofread)
+                presetButton(.rewrite)
+            }
+            Divider()
+            presetRow(.friendly)
+            presetRow(.professional)
+            presetRow(.concise)
+            if isPresetProcessing {
+                ProgressView("Processing…")
+                    .controlSize(.small)
+            }
+            if let presetError {
+                Text(presetError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+            Divider()
+            Text("Voice actions")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Button {
+                showTextPresetPopover = false
+                if let noteID = library.selectedID { appState.startNoteUpdate(noteID: noteID) }
+            } label: {
+                Label("Update by voice", systemImage: "mic")
+            }
+            .disabled(library.selectedID == nil)
+            Button {
+                showTextPresetPopover = false
+                if let noteID = library.selectedID { appState.startNoteAppend(noteID: noteID) }
+            } label: {
+                Label("Append by voice", systemImage: "mic")
+            }
+            .disabled(library.selectedID == nil)
+        }
+        .padding(18)
+        .frame(width: 300)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    private func presetButton(_ preset: TextActionPreset) -> some View {
+        Button {
+            if let note = library.notes.first(where: { $0.id == library.selectedID }) {
+                runTextPreset(preset, for: note)
+            }
+        } label: {
+            VStack(spacing: 6) {
+                Image(systemName: preset.icon).font(.title2)
+                Text(preset.title).font(.headline)
+            }
+            .frame(maxWidth: .infinity, minHeight: 66)
+        }
+        .buttonStyle(.bordered)
+        .disabled(isPresetProcessing)
+    }
+
+    private func presetRow(_ preset: TextActionPreset) -> some View {
+        Button {
+            if let note = library.notes.first(where: { $0.id == library.selectedID }) {
+                runTextPreset(preset, for: note)
+            }
+        } label: {
+            Label(preset.title, systemImage: preset.icon)
+                .font(.headline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .disabled(isPresetProcessing)
     }
 
     @ViewBuilder
@@ -468,7 +629,9 @@ struct NotesView: View {
             }
             noteRecordingStatus
             if let note = library.notes.first(where: { $0.id == library.selectedID }) {
-                if let proposal = appState.pendingNoteUpdate, proposal.noteID == note.id {
+                if let presetPreview = textPresetPreview, presetPreview.noteID == note.id {
+                    textPresetPreviewView(presetPreview, note: note)
+                } else if let proposal = appState.pendingNoteUpdate, proposal.noteID == note.id {
                     noteUpdatePreview(proposal, note: note)
                 } else {
                     noteHeader(note)
@@ -624,6 +787,44 @@ struct NotesView: View {
         }
         .padding(24)
         .frame(width: 360)
+    }
+
+    private func textPresetPreviewView(_ preview: TextPresetPreview, note: MarkdownNote) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Preview (preview.preset.title.lowercased())")
+                        .font(.title2.weight(.semibold))
+                    Text("Review the selected-text replacement before applying it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Revert") { textPresetPreview = nil }
+                Button("Apply") { applyTextPresetPreview(preview) }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .background(.quaternary.opacity(0.35))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Original")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(preview.originalText)
+                        .textSelection(.enabled)
+                    Divider()
+                    Text("\(preview.preset.title) result")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Markdown(preview.replacementText, baseURL: MarkdownNoteStore.standard.noteFolderURL(for: note))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(28)
+            }
+        }
     }
 
     private func chooseAttachment(for note: MarkdownNote) {
@@ -808,26 +1009,19 @@ struct NotesView: View {
             .disabled(!library.canUndoSelectedNote)
             .accessibilityLabel("Undo")
             .help("Undo the last note edit")
-            Menu {
-                Button {
-                    appState.startNoteUpdate(noteID: note.id)
-                } label: {
-                    Label("Update", systemImage: "wand.and.stars")
-                }
-                Button {
-                    appState.startNoteAppend(noteID: note.id)
-                } label: {
-                    Label("Append", systemImage: "text.append")
-                }
+            Button {
+                presetError = nil
+                showTextPresetPopover.toggle()
             } label: {
                 NotesHeaderIconControl(systemName: "sparkles")
             }
-            .menuStyle(.button)
             .buttonStyle(.plain)
             .disabled(appState.isRecording || appState.isTranscribing)
             .accessibilityLabel("Note actions")
-            .help("Update or append to this note")
-            .menuIndicator(.hidden)
+            .help("Transform selected text or update this note by voice")
+            .popover(isPresented: $showTextPresetPopover, arrowEdge: .top) {
+                textPresetPopover
+            }
             Button {
                 chooseAttachment(for: note)
             } label: {
