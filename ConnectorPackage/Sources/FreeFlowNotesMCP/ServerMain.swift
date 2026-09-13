@@ -10,8 +10,8 @@ struct FreeFlowNotesServer {
         await server.withMethodHandler(ListTools.self) { _ in
             .init(tools: [
                 Tool(name: "usage_guidelines", description: "Returns concise cross-tool rules for FreeFlow Markdown notes, IDs, attachments, revisions, and safety.", inputSchema: .object(["type": "object", "properties": .object([:])])),
-                Tool(name: "notes", description: "Read or mutate FreeFlow notes. The required action is one of list, read, create, update, delete, move, create_folder, rename_folder, or attach.", inputSchema: .object(["type": "object", "properties": .object(["action": .object(["type": "string", "enum": .array(["list", "read", "create", "update", "delete", "move", "create_folder", "rename_folder", "attach"])]), "note_id": .string("Stable note UUID"), "content": .string("Markdown content"), "title": .string("Optional title"), "folder": .string("Relative folder"), "revision": .string("Revision returned by read"), "from": .string("Source folder"), "to": .string("Destination folder"), "name": .string("Folder or attachment name"), "path": .string("Relative attachment source path")]), "required": .array(["action"])]), annotations: .init(readOnlyHint: false, destructiveHint: true)),
-                Tool(name: "search_notes", description: "Searches FreeFlow notes with BM25 relevance ranking and cursor pagination.", inputSchema: .object(["type": "object", "properties": .object(["query": .string("Search text"), "folder": .string("Optional relative folder"), "limit": .object(["type": "integer", "minimum": 1, "maximum": 100]), "cursor": .string("Opaque pagination cursor")]), "required": .array(["query"])]), annotations: .init(readOnlyHint: true, destructiveHint: false))
+                Tool(name: "notes", description: "Read or mutate FreeFlow notes. The required action is one of list, read, create, update, delete, move, create_folder, rename_folder, or attach.", inputSchema: .object(["type": "object", "properties": .object(["action": .object(["type": "string", "enum": .array(["list", "read", "create", "update", "delete", "move", "create_folder", "rename_folder", "attach"])]), "note_id": schemaString("Stable note UUID"), "content": schemaString("Markdown content"), "title": schemaString("Optional title"), "folder": schemaString("Relative folder"), "revision": schemaString("Revision returned by read"), "from": schemaString("Source folder"), "to": schemaString("Destination folder"), "name": schemaString("Folder or attachment name"), "path": schemaString("Relative attachment source path")]), "required": .array(["action"])]), annotations: .init(readOnlyHint: false, destructiveHint: true)),
+                Tool(name: "search_notes", description: "Searches FreeFlow notes with BM25 relevance ranking and cursor pagination.", inputSchema: .object(["type": "object", "properties": .object(["query": schemaString("Search text"), "folder": schemaString("Optional relative folder"), "limit": .object(["type": "integer", "description": "Maximum results per page", "minimum": 1, "maximum": 100]), "cursor": schemaString("Opaque pagination cursor")]), "required": .array(["query"])]), annotations: .init(readOnlyHint: true, destructiveHint: false))
             ])
         }
         await server.withMethodHandler(CallTool.self) { [store] params in
@@ -37,6 +37,10 @@ struct FreeFlowNotesServer {
         let transport = StdioTransport()
         try await server.start(transport: transport)
         await server.waitUntilCompleted()
+    }
+
+    private func schemaString(_ description: String) -> Value {
+        .object(["type": .string("string"), "description": .string(description)])
     }
 
     private func handleNotes(_ args: [String: Value]) throws -> CallTool.Result {
