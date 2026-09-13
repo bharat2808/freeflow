@@ -1,4 +1,5 @@
 import Foundation
+import Logging
 import MCP
 import FreeFlowNotesCore
 
@@ -34,7 +35,7 @@ struct FreeFlowNotesServer {
                 return .init(content: [.text(text: error.localizedDescription)], isError: true)
             }
         }
-        let transport = StdioTransport()
+        let transport = ChatGPTCompatibleStdioTransport()
         try await server.start(transport: transport)
         await server.waitUntilCompleted()
     }
@@ -90,6 +91,66 @@ struct FreeFlowNotesServer {
     }
 
     private func snippet(_ content: String, query: String) -> String { String(content.replacingOccurrences(of: "\n", with: " ").prefix(240)) }
+}
+
+/// Bridges ChatGPT's newer initialize capability fields to SDK 0.12.x.
+/// The SDK currently models `experimental` as string values and does not model
+/// `extensions`, so decoding ChatGPT's nested capability objects fails before
+/// the server's initialize handler runs.
+private actor ChatGPTCompatibleStdioTransport: Transport {
+    private let base = StdioTransport()
+    private let continuation: AsyncThrowingStream<Data, Error>.Continuation
+    private let stream: AsyncThrowingStream<Data, Error>
+    private var connected = false
+
+    nonisolated let logger = Logger(label: "freeflow-notes.mcp.stdio")
+
+    init() {
+        var continuation: AsyncThrowingStream<Data, Error>.Continuation!
+        stream = AsyncThrowingStream { continuation = $0 }
+        self.continuation = continuation
+    }
+
+    func connect() async throws {
+        guard !connected else { return }
+        try await base.connect()
+        connected = true
+        let incoming = await base.receive()
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                for try await message in incoming {
+                    await self.continuation.yield(self.sanitize(message))
+                }
+                await self.continuation.finish()
+            } catch {
+                await self.continuation.finish(throwing: error)
+            }
+        }
+    }
+
+    func disconnect() async {
+        connected = false
+        await base.disconnect()
+        continuation.finish()
+    }
+
+    func send(_ data: Data) async throws { try await base.send(data) }
+
+    func receive() -> AsyncThrowingStream<Data, Error> { stream }
+
+    private func sanitize(_ data: Data) -> Data {
+        guard var message = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              message["method"] as? String == "initialize",
+              var params = message["params"] as? [String: Any],
+              var capabilities = params["capabilities"] as? [String: Any]
+        else { return data }
+        capabilities.removeValue(forKey: "experimental")
+        capabilities.removeValue(forKey: "extensions")
+        params["capabilities"] = capabilities
+        message["params"] = params
+        return (try? JSONSerialization.data(withJSONObject: message)) ?? data
+    }
 }
 
 private extension Array { subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil } }
