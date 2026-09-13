@@ -9,6 +9,28 @@ struct AppSelectionSnapshot {
     let selectedText: String?
 }
 
+struct NoteGenerationContext: Sendable {
+    let noteID: UUID
+    let title: String
+    let markdown: String
+    let wasTruncated: Bool
+
+    static let maxMarkdownCharacters = 100_000
+
+    init(note: MarkdownNote) {
+        let markdown = note.markdown
+        if markdown.count > Self.maxMarkdownCharacters {
+            self.markdown = String(markdown.prefix(Self.maxMarkdownCharacters))
+            self.wasTruncated = true
+        } else {
+            self.markdown = markdown
+            self.wasTruncated = false
+        }
+        self.noteID = note.id
+        self.title = note.title
+    }
+}
+
 struct AppContext {
     let appName: String?
     let bundleIdentifier: String?
@@ -20,6 +42,49 @@ struct AppContext {
     let screenshotDataURL: String?
     let screenshotMimeType: String?
     let screenshotError: String?
+    let noteGenerationContext: NoteGenerationContext?
+
+    init(
+        appName: String?,
+        bundleIdentifier: String?,
+        windowTitle: String?,
+        selectedText: String?,
+        currentActivity: String,
+        contextSystemPrompt: String?,
+        contextPrompt: String?,
+        screenshotDataURL: String?,
+        screenshotMimeType: String?,
+        screenshotError: String?,
+        noteGenerationContext: NoteGenerationContext? = nil
+    ) {
+        self.appName = appName
+        self.bundleIdentifier = bundleIdentifier
+        self.windowTitle = windowTitle
+        self.selectedText = selectedText
+        self.currentActivity = currentActivity
+        self.contextSystemPrompt = contextSystemPrompt
+        self.contextPrompt = contextPrompt
+        self.screenshotDataURL = screenshotDataURL
+        self.screenshotMimeType = screenshotMimeType
+        self.screenshotError = screenshotError
+        self.noteGenerationContext = noteGenerationContext
+    }
+
+    func withNoteGenerationContext(_ noteContext: NoteGenerationContext?) -> AppContext {
+        AppContext(
+            appName: appName,
+            bundleIdentifier: bundleIdentifier,
+            windowTitle: windowTitle,
+            selectedText: selectedText,
+            currentActivity: currentActivity,
+            contextSystemPrompt: contextSystemPrompt,
+            contextPrompt: contextPrompt,
+            screenshotDataURL: screenshotDataURL,
+            screenshotMimeType: screenshotMimeType,
+            screenshotError: screenshotError,
+            noteGenerationContext: noteContext
+        )
+    }
 
     var contextSummary: String {
         currentActivity

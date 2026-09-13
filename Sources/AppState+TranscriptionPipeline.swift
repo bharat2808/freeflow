@@ -157,6 +157,7 @@ extension AppState {
         let sessionIntent = currentSessionIntent
         pendingGeneration = false
         let shouldSaveAsNote = activeNoteRecording
+        let generationNoteContext = activeGenerationNoteContext
         activeRecordingTriggerMode = nil
         currentSessionIntent = .dictation
         activeNoteRecording = false
@@ -182,8 +183,9 @@ extension AppState {
                 screenshotError: nil
             )
         } else {
-            sessionContext = capturedContext
+            sessionContext = capturedContext?.withNoteGenerationContext(generationNoteContext)
         }
+        activeGenerationNoteContext = nil
         let inFlightContextTask = contextCaptureTask
         let noteUpdateTargetID = activeNoteUpdateTargetID ?? self.noteUpdateTargetID
         let noteVoiceAction = activeNoteUpdateAction ?? self.noteVoiceAction ?? .update
@@ -325,9 +327,9 @@ extension AppState {
                         appContext = sessionContext
                     } else if let inFlightContext = await inFlightContextTask?.value {
                         os_log(.info, log: transcriptionPipelineLog, "awaited in-flight context capture")
-                        appContext = inFlightContext
+                        appContext = inFlightContext.withNoteGenerationContext(generationNoteContext)
                     } else {
-                        appContext = self.fallbackContextAtStop()
+                        appContext = self.fallbackContextAtStop().withNoteGenerationContext(generationNoteContext)
                     }
                     let contextWaitElapsed = CFAbsoluteTimeGetCurrent() - contextWaitStartedAt
                     try Task.checkCancellation()

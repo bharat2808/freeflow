@@ -472,6 +472,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     var pendingManualCommandInvocation = false
     var pendingNoteRecording = false
     var pendingGeneration = false
+    var activeGenerationNoteContext: NoteGenerationContext?
     var activeNoteRecording = false
     var activeNewNoteID: UUID?
     var activeNoteUpdateTargetID: UUID?

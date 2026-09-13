@@ -114,6 +114,7 @@ extension AppState {
         contextCaptureTask = nil
         capturedContext = nil
         currentSessionIntent = .dictation
+        activeGenerationNoteContext = nil
         noteUpdateTargetID = nil
         noteVoiceAction = nil
         liveNoteTranscript = ""
@@ -289,6 +290,9 @@ extension AppState {
         let scheduledSelectionSnapshot = pendingSelectionSnapshot
         let scheduledManualCommandInvocation = pendingManualCommandInvocation
         let scheduledGeneration = pendingGeneration
+        let scheduledGenerationNoteContext = scheduledGeneration
+            ? selectedNoteContextForGeneration()
+            : nil
         cancelPendingShortcutStart()
         guard prepareRecordingStart(
             triggerMode: triggerMode,
@@ -301,6 +305,7 @@ extension AppState {
         ) else {
             activeNoteRecording = false
             pendingGeneration = false
+            activeGenerationNoteContext = nil
             noteUpdateTargetID = nil
             noteVoiceAction = nil
             return
@@ -310,9 +315,11 @@ extension AppState {
             noteVoiceAction = nil
             if !isAwaitingMicrophonePermission {
                 activeNoteRecording = false
+                activeGenerationNoteContext = nil
             }
             return
         }
+        activeGenerationNoteContext = scheduledGenerationNoteContext
         os_log(.info, log: recordingSessionLog, "mic access check passed: %.3fms", (CFAbsoluteTimeGetCurrent() - t0) * 1000)
         applyAudioInterruptionIfNeeded()
         beginRecording(triggerMode: triggerMode)
@@ -648,6 +655,7 @@ extension AppState {
         activeRecordingTriggerMode = nil
         currentSessionIntent = .dictation
         pendingGeneration = false
+        activeGenerationNoteContext = nil
         noteUpdateTargetID = nil
         noteVoiceAction = nil
         liveNoteTranscript = ""
