@@ -18,6 +18,7 @@ struct ShortcutInputState: Equatable {
     var holdIsActive = false
     var toggleIsActive = false
     var copyAgainIsActive = false
+    var generateIsActive = false
 
     var currentModifiers: ShortcutModifiers {
         ShortcutBinding.modifiers(for: pressedModifierKeyCodes)
@@ -29,7 +30,8 @@ struct ShortcutInputState: Equatable {
             let isHoldKey = configuration.hold.kind == .key && configuration.hold.keyCode == keyCode
             let isToggleKey = configuration.toggle.kind == .key && configuration.toggle.keyCode == keyCode
             let isCopyAgainKey = configuration.copyAgain.kind == .key && configuration.copyAgain.keyCode == keyCode
-            return isHoldKey || isToggleKey || isCopyAgainKey
+            let isGenerateKey = configuration.generate.kind == .key && configuration.generate.keyCode == keyCode
+            return isHoldKey || isToggleKey || isCopyAgainKey || isGenerateKey
         }
         if keyReferenceHeld {
             return true
@@ -52,6 +54,14 @@ struct ShortcutInputState: Equatable {
         }
 
         if configuration.copyAgain.referencesPressedModifiers(
+            pressedModifierKeyCodes: pressedModifierKeyCodes,
+            currentModifiers: currentModifiers,
+            permittedAdditionalExactMatchModifiers: configuration.permittedAdditionalExactMatchModifiers
+        ) {
+            return true
+        }
+
+        if configuration.generate.referencesPressedModifiers(
             pressedModifierKeyCodes: pressedModifierKeyCodes,
             currentModifiers: currentModifiers,
             permittedAdditionalExactMatchModifiers: configuration.permittedAdditionalExactMatchModifiers
@@ -174,10 +184,12 @@ enum ShortcutMatcher {
         let previousHold = state.holdIsActive
         let previousToggle = state.toggleIsActive
         let previousCopyAgain = state.copyAgainIsActive
+        let previousGenerate = state.generateIsActive
 
         state.holdIsActive = bindingIsActive(configuration.hold, state: state, configuration: configuration)
         state.toggleIsActive = bindingIsActive(configuration.toggle, state: state, configuration: configuration)
         state.copyAgainIsActive = bindingIsActive(configuration.copyAgain, state: state, configuration: configuration)
+        state.generateIsActive = bindingIsActive(configuration.generate, state: state, configuration: configuration)
 
         return emitChanges(
             previousHold: previousHold,
@@ -186,6 +198,8 @@ enum ShortcutMatcher {
             currentHold: state.holdIsActive,
             currentToggle: state.toggleIsActive,
             currentCopyAgain: state.copyAgainIsActive,
+            previousGenerate: previousGenerate,
+            currentGenerate: state.generateIsActive,
             configuration: configuration
         )
     }
@@ -197,6 +211,8 @@ enum ShortcutMatcher {
         currentHold: Bool,
         currentToggle: Bool,
         currentCopyAgain: Bool,
+        previousGenerate: Bool,
+        currentGenerate: Bool,
         configuration: ShortcutConfiguration
     ) -> [ShortcutEvent] {
         var activations: [(ShortcutEvent, Int)] = []
@@ -212,11 +228,17 @@ enum ShortcutMatcher {
         if !previousCopyAgain && currentCopyAgain {
             activations.append((.copyAgainTriggered, configuration.copyAgain.specificityScore))
         }
+        if !previousGenerate && currentGenerate {
+            activations.append((.generateActivated, configuration.generate.specificityScore))
+        }
         if previousHold && !currentHold {
             deactivations.append((.holdDeactivated, configuration.hold.specificityScore))
         }
         if previousToggle && !currentToggle {
             deactivations.append((.toggleDeactivated, configuration.toggle.specificityScore))
+        }
+        if previousGenerate && !currentGenerate {
+            deactivations.append((.generateDeactivated, configuration.generate.specificityScore))
         }
 
         let orderedActivations = activations.sorted(by: { $0.1 > $1.1 }).map(\.0)

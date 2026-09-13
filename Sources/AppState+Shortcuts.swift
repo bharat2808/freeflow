@@ -5,7 +5,7 @@ private let shortcutLog = OSLog(subsystem: "com.zachlatta.freeflow", category: "
 
 extension AppState {
     var usesFnShortcut: Bool {
-        holdShortcut.usesFnKey || toggleShortcut.usesFnKey || copyAgainShortcut.usesFnKey
+        holdShortcut.usesFnKey || toggleShortcut.usesFnKey || copyAgainShortcut.usesFnKey || generateShortcut.usesFnKey
     }
 
     var hasEnabledHoldShortcut: Bool {
@@ -29,7 +29,7 @@ extension AppState {
         case (false, true):
             return "Tap \(toggleShortcut.displayName) to dictate"
         case (false, false):
-            return "No dictation shortcut enabled"
+            return generateShortcut.isDisabled ? "No dictation shortcut enabled" : "Generate shortcut enabled"
         }
     }
 
@@ -45,6 +45,8 @@ extension AppState {
             return savedToggleCustomShortcut
         case .copyAgain:
             return savedCopyAgainCustomShortcut
+        case .generate:
+            return nil
         }
     }
 
@@ -95,6 +97,9 @@ extension AppState {
         if role != .copyAgain, binding.conflicts(with: copyAgainShortcut) {
             return "This shortcut is already used by Paste Again."
         }
+        if role != .generate, binding.conflicts(with: generateShortcut) {
+            return "This shortcut is already used by Generate."
+        }
         if role == .copyAgain {
             if binding.conflicts(with: holdShortcut) {
                 return "Paste Again cannot share a shortcut with Hold to Talk."
@@ -105,6 +110,11 @@ extension AppState {
             if isCommandModeEnabled, commandModeStyle == .manual,
                bindingCollides(binding, with: commandModeManualModifier) {
                 return "Paste Again cannot share the Edit Mode modifier."
+            }
+        }
+        if role == .generate {
+            if binding.conflicts(with: holdShortcut) || binding.conflicts(with: toggleShortcut) || binding.conflicts(with: copyAgainShortcut) {
+                return "Generate cannot share a shortcut with another action."
             }
         }
 
@@ -124,6 +134,8 @@ extension AppState {
                 savedCopyAgainCustomShortcut = binding
             }
             copyAgainShortcut = binding
+        case .generate:
+            generateShortcut = binding
         }
 
         return nil
@@ -227,6 +239,7 @@ extension AppState {
             hold: holdShortcut,
             toggle: toggleShortcut,
             copyAgain: copyAgainShortcut,
+            generate: generateShortcut,
             permittedAdditionalExactMatchModifiers: permittedAdditionalExactMatchModifiers
         )
     }
@@ -249,6 +262,18 @@ extension AppState {
     private func handleShortcutEvent(_ event: ShortcutEvent) {
         if event == .copyAgainTriggered {
             copyLastTranscriptToPasteboard()
+            return
+        }
+        if event == .generateActivated {
+            guard !isRecording, !isTranscribing else { return }
+            pendingGeneration = true
+            startRecording(triggerMode: .hold)
+            return
+        }
+        if event == .generateDeactivated {
+            guard pendingGeneration, isRecording else { return }
+            pendingGeneration = false
+            stopAndTranscribe()
             return
         }
 

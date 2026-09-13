@@ -15,6 +15,7 @@ enum ShortcutCoreTests {
         testHoldSessionControllerLifecycle()
         testToggleSessionControllerLifecycle()
         testHoldToToggleSessionControllerLifecycle()
+        testGenerateShortcutLifecycle()
     }
 
     private static func testBareFnHoldLifecycle() {
@@ -34,6 +35,27 @@ enum ShortcutCoreTests {
         TestSupport.expectEqual(down.consumeDecision, .consume)
         TestSupport.expectEqual(up.emittedEvents, [.holdDeactivated])
         TestSupport.expectEqual(up.consumeDecision, .consume)
+    }
+
+    private static func testGenerateShortcutLifecycle() {
+        let configuration = ShortcutConfiguration(
+            hold: .disabled,
+            toggle: .disabled,
+            generate: .defaultHold
+        )
+        let down = ShortcutMatcher.reduce(
+            state: ShortcutInputState(),
+            event: .modifierChanged(keyCode: 63, isDown: true),
+            configuration: configuration
+        )
+        let up = ShortcutMatcher.reduce(
+            state: down.state,
+            event: .modifierChanged(keyCode: 63, isDown: false),
+            configuration: configuration
+        )
+
+        TestSupport.expectEqual(down.emittedEvents, [.generateActivated])
+        TestSupport.expectEqual(up.emittedEvents, [.generateDeactivated])
     }
 
     private static func testDefaultShortcutSpecificityOrdering() {

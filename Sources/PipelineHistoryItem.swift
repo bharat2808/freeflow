@@ -2,6 +2,7 @@ import Foundation
 
 enum PipelineHistoryItemIntent: String, Codable {
     case dictation
+    case generate
     case commandAutomatic = "command:automatic"
     case commandManual = "command:manual"
 }

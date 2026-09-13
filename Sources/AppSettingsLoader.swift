@@ -4,6 +4,7 @@ struct StoredShortcutConfiguration {
     let hold: ShortcutBinding
     let toggle: ShortcutBinding
     let copyAgain: ShortcutBinding
+    let generate: ShortcutBinding
     let didUpdateHoldStoredValue: Bool
     let didUpdateToggleStoredValue: Bool
     let didUpdateCopyAgainStoredValue: Bool
@@ -67,7 +68,8 @@ enum AppSettingsLoader {
     static func loadShortcutConfiguration(
         holdKey: String,
         toggleKey: String,
-        copyAgainKey: String
+        copyAgainKey: String,
+        generateKey: String? = nil
     ) -> StoredShortcutConfiguration {
         let legacyPreset = ShortcutPreset(
             rawValue: UserDefaults.standard.string(forKey: "hotkey_option") ?? ShortcutPreset.fnKey.rawValue
@@ -77,10 +79,12 @@ enum AppSettingsLoader {
         let storedHold = loadShortcut(forKey: holdKey)
         let storedToggle = loadShortcut(forKey: toggleKey)
         let storedCopyAgain = loadShortcut(forKey: copyAgainKey)
+        let storedGenerate = generateKey.map { loadShortcut(forKey: $0) }
         return StoredShortcutConfiguration(
             hold: storedHold.binding ?? hold,
             toggle: storedToggle.binding ?? toggle,
             copyAgain: storedCopyAgain.binding ?? .disabled,
+            generate: storedGenerate?.binding ?? .disabled,
             didUpdateHoldStoredValue: storedHold.binding == nil || storedHold.didNormalize,
             didUpdateToggleStoredValue: storedToggle.binding == nil || storedToggle.didNormalize,
             didUpdateCopyAgainStoredValue: storedCopyAgain.didNormalize

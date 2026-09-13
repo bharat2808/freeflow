@@ -21,6 +21,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private let holdShortcutStorageKey = "hold_shortcut"
     private let toggleShortcutStorageKey = "toggle_shortcut"
     private let copyAgainShortcutStorageKey = "copy_again_shortcut"
+    private let generateShortcutStorageKey = "generate_shortcut"
     private let savedHoldCustomShortcutStorageKey = "saved_hold_custom_shortcut"
     private let savedToggleCustomShortcutStorageKey = "saved_toggle_custom_shortcut"
     private let savedCopyAgainCustomShortcutStorageKey = "saved_copy_again_custom_shortcut"
@@ -29,6 +30,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private let selectedMicrophoneStorageKey = "selected_microphone_id"
     private let customSystemPromptStorageKey = "custom_system_prompt"
     private let noteSystemPromptStorageKey = "note_system_prompt"
+    private let generateSystemPromptStorageKey = "generate_system_prompt"
     private let customContextPromptStorageKey = "custom_context_prompt"
     private let instructionExecutionGuardEnabledStorageKey = "instruction_execution_guard_enabled"
     private let customSystemPromptLastModifiedStorageKey = "custom_system_prompt_last_modified"
@@ -195,6 +197,13 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
     }
 
+    @Published var generateShortcut: ShortcutBinding {
+        didSet {
+            persistShortcut(generateShortcut, key: generateShortcutStorageKey)
+            restartHotkeyMonitoring()
+        }
+    }
+
     @Published var savedHoldCustomShortcut: ShortcutBinding? {
         didSet {
             persistOptionalShortcut(savedHoldCustomShortcut, key: savedHoldCustomShortcutStorageKey)
@@ -261,6 +270,10 @@ final class AppState: ObservableObject, @unchecked Sendable {
         didSet {
             UserDefaults.standard.set(noteSystemPrompt, forKey: noteSystemPromptStorageKey)
         }
+    }
+
+    @Published var generateSystemPrompt: String {
+        didSet { UserDefaults.standard.set(generateSystemPrompt, forKey: generateSystemPromptStorageKey) }
     }
 
     @Published var customContextPrompt: String {
@@ -458,6 +471,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     var pendingSelectionSnapshot: AppSelectionSnapshot?
     var pendingManualCommandInvocation = false
     var pendingNoteRecording = false
+    var pendingGeneration = false
     var activeNoteRecording = false
     var activeNewNoteID: UUID?
     var activeNoteUpdateTargetID: UUID?
@@ -500,7 +514,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
         let shortcuts = AppSettingsLoader.loadShortcutConfiguration(
             holdKey: holdShortcutStorageKey,
             toggleKey: toggleShortcutStorageKey,
-            copyAgainKey: copyAgainShortcutStorageKey
+            copyAgainKey: copyAgainShortcutStorageKey,
+            generateKey: generateShortcutStorageKey
         )
         let savedHoldCustomShortcut = AppSettingsLoader.loadSavedCustomShortcut(
             forKey: savedHoldCustomShortcutStorageKey,
@@ -520,6 +535,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         )
         let customSystemPrompt = UserDefaults.standard.string(forKey: customSystemPromptStorageKey) ?? ""
         let noteSystemPrompt = UserDefaults.standard.string(forKey: noteSystemPromptStorageKey) ?? ""
+        let generateSystemPrompt = UserDefaults.standard.string(forKey: generateSystemPromptStorageKey) ?? ""
         let customContextPrompt = UserDefaults.standard.string(forKey: customContextPromptStorageKey) ?? ""
         let instructionExecutionGuardEnabled = UserDefaults.standard.object(
             forKey: instructionExecutionGuardEnabledStorageKey
@@ -607,6 +623,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.holdShortcut = shortcuts.hold
         self.toggleShortcut = shortcuts.toggle
         self.copyAgainShortcut = shortcuts.copyAgain
+        self.generateShortcut = shortcuts.generate
         self.savedHoldCustomShortcut = savedHoldCustomShortcut.binding
         self.savedToggleCustomShortcut = savedToggleCustomShortcut.binding
         self.savedCopyAgainCustomShortcut = savedCopyAgainCustomShortcut.binding
@@ -617,6 +634,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.transcriptionLanguage = transcriptionLanguage
         self.customSystemPrompt = customSystemPrompt
         self.noteSystemPrompt = noteSystemPrompt
+        self.generateSystemPrompt = generateSystemPrompt
         self.customContextPrompt = customContextPrompt
         self.instructionExecutionGuardEnabled = instructionExecutionGuardEnabled
         self.contextScreenshotMaxDimension = contextScreenshotMaxDimension

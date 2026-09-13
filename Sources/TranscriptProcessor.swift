@@ -16,6 +16,8 @@ enum TranscriptProcessingOutcome: Sendable {
     case preservedExactWordingTranslationFailedFallback
     case commandModeSucceeded(invocation: CommandInvocation)
     case commandModeFailedFallback(invocation: CommandInvocation)
+    case generationSucceeded
+    case generationFailed
 
     func statusMessage(isRetry: Bool = false) -> String {
         switch self {
@@ -39,6 +41,10 @@ enum TranscriptProcessingOutcome: Sendable {
             return "Edit mode succeeded (\(invocation.rawValue))"
         case .commandModeFailedFallback(let invocation):
             return "Edit mode failed, using selected text (\(invocation.rawValue))"
+        case .generationSucceeded:
+            return isRetry ? "Generation succeeded (retried)" : "Generation succeeded"
+        case .generationFailed:
+            return "Generation failed"
         }
     }
 
