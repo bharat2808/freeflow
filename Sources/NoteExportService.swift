@@ -127,7 +127,11 @@ enum NoteExportService {
 
         let renderedAttributed = NSMutableAttributedString(attributedString: attributed)
         applyTextSpacing(to: renderedAttributed, factor: textSpacing)
-        replaceAssetTokens(in: renderedAttributed, assetDirectory: assetDirectory)
+        replaceAssetTokens(
+            in: renderedAttributed,
+            assetDirectory: assetDirectory,
+            maximumWidth: pageSize.width - 96
+        )
 
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: pageSize.width, height: 100_000))
         textView.isEditable = false
@@ -308,6 +312,7 @@ enum NoteExportService {
         ul { margin-top: 5px; } li { margin: 3px 0; }
         .subtitle { color: #666; margin-bottom: 24px; }
         .attachment { border: 1px solid #b9b9b9; border-radius: 7px; padding: 10px 12px; margin: 14px 0; page-break-inside: avoid; }
+        .attachment-document { margin: 14px 0; }
         .attachment-title { font-weight: 600; }
         .attachment-meta { color: #666; font-size: 10pt; margin-top: 3px; }
         .attachment-widget { display: flex; align-items: center; gap: 10px; padding: 12px 14px; margin: 16px 0; }
@@ -400,6 +405,67 @@ enum NoteExportService {
         store: MarkdownNoteStore,
         assetDirectory: URL
     ) -> String {
+        let sourceNSString = source as NSString
+        let expression = try? NSRegularExpression(
+            pattern: #"^```mermaid[ \t]*\n.*?^```[ \t]*$"#,
+            options: [.anchorsMatchLines, .dotMatchesLineSeparators]
+        )
+        let matches = expression?.matches(
+            in: source,
+            range: NSRange(location: 0, length: sourceNSString.length)
+        ) ?? []
+        guard !matches.isEmpty else {
+            return renderedMarkdownBlocks(
+                source,
+                note: note,
+                baseURL: baseURL,
+                attachmentPresentation: attachmentPresentation,
+                store: store,
+                assetDirectory: assetDirectory
+            )
+        }
+
+        var output: [String] = []
+        var location = 0
+        for match in matches {
+            if match.range.location > location {
+                output.append(renderedMarkdownBlocks(
+                    sourceNSString.substring(with: NSRange(
+                        location: location,
+                        length: match.range.location - location
+                    )),
+                    note: note,
+                    baseURL: baseURL,
+                    attachmentPresentation: attachmentPresentation,
+                    store: store,
+                    assetDirectory: assetDirectory
+                ))
+            }
+            let fencedDiagram = sourceNSString.substring(with: match.range)
+            output.append(mermaidDiagramHTML(fencedDiagram, assetDirectory: assetDirectory) ?? markdownBlock(fencedDiagram))
+            location = NSMaxRange(match.range)
+        }
+        if location < sourceNSString.length {
+            output.append(renderedMarkdownBlocks(
+                sourceNSString.substring(from: location),
+                note: note,
+                baseURL: baseURL,
+                attachmentPresentation: attachmentPresentation,
+                store: store,
+                assetDirectory: assetDirectory
+            ))
+        }
+        return output.filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+
+    private static func renderedMarkdownBlocks(
+        _ source: String,
+        note: MarkdownNote?,
+        baseURL: URL,
+        attachmentPresentation: NoteAttachmentPresentation,
+        store: MarkdownNoteStore,
+        assetDirectory: URL
+    ) -> String {
         source.components(separatedBy: "\n\n").compactMap { block -> String? in
             let value = block.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !value.isEmpty else { return nil }
@@ -415,9 +481,6 @@ enum NoteExportService {
                 }
             }
 
-            if let diagram = mermaidDiagramHTML(value, assetDirectory: assetDirectory) {
-                return diagram
-            }
             return markdownBlock(value)
         }.joined(separator: "\n\n")
     }
@@ -465,7 +528,7 @@ enum NoteExportService {
             pattern: #"^\s*participant\s+([A-Za-z0-9_-]+)(?:\s+as\s+(.+))?\s*$"#
         )
         let messageExpression = try? NSRegularExpression(
-            pattern: #"^\s*([A-Za-z0-9_-]+)\s*(-->>|->>|-->|->)\s*([A-Za-z0-9_-]+)\s*:\s*(.+)$"#
+            pattern: #"^\s*([A-Za-z0-9_][A-Za-z0-9_-]*?)\s*(-->>|->>|-->|->)\s*([A-Za-z0-9_][A-Za-z0-9_-]*?)\s*:\s*(.+)$"#
         )
 
         for line in diagramLines.dropFirst() {
@@ -499,7 +562,7 @@ enum NoteExportService {
         let rowHeight = 48
         let height = top + max(1, messages.count) * rowHeight + 40
         let positions = Dictionary(uniqueKeysWithValues: participants.enumerated().map { index, participant in
-            (participant.id, 40 + index * columnWidth)
+            (participant.id, 75 + index * columnWidth)
         })
 
         guard let png = sequenceDiagramPNG(
@@ -612,6 +675,9 @@ enum NoteExportService {
             } else if line.hasPrefix("- ") || line.hasPrefix("* ") {
                 if !inList { output += "<ul>"; inList = true }
                 output += "<li>\(inlineMarkdown(String(line.dropFirst(2))))</li>"
+            } else if line.trimmingCharacters(in: .whitespaces) == "---" {
+                if inList { output += "</ul>"; inList = false }
+                output += "<hr>"
             } else if !line.trimmingCharacters(in: .whitespaces).isEmpty {
                 if inList { output += "</ul>"; inList = false }
                 output += "<p>\(inlineMarkdown(escaped))</p>"
@@ -714,7 +780,7 @@ enum NoteExportService {
                 store: store,
                 assetDirectory: assetDirectory
             )
-            return "<div class=\"attachment\"><div class=\"attachment-title\">\(htmlEscape(attachment.label))</div>\(nested)</div>"
+            return "<section class=\"attachment-document\"><div class=\"attachment-title\">\(htmlEscape(attachment.label))</div>\(nested)</section>"
         }
 
         if let pdf = PDFDocument(url: attachment.url) {
@@ -758,46 +824,14 @@ enum NoteExportService {
         let blocks = rawBlocks.isEmpty ? [""] : rawBlocks
         var pages: [ExportPage] = []
         var pendingBlocks: [String] = []
-        var hasRenderedTitle = false
+        var shouldIncludeTitle = true
 
-        for (index, rawBlock) in blocks.enumerated() {
-            let block = rawBlock.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !block.isEmpty || index == 0 else { continue }
-            pendingBlocks.append(block)
-            if let attachment = attachment(in: block, note: note, baseURL: baseURL, store: store) {
-                let pendingHTML = html(
-                    for: note,
-                    source: pendingBlocks.joined(separator: "\n\n"),
-                    includeTitle: !hasRenderedTitle,
-                    attachmentPresentation: attachmentPresentation,
-                    store: store,
-                    assetDirectory: assetDirectory,
-                    paperSize: paperSize,
-                    textScale: textScale,
-                    textSpacing: textSpacing
-                )
-                pages.append(contentsOf: try textPages(
-                    from: pendingHTML,
-                    assetDirectory: assetDirectory,
-                    pageSize: paperSize.pageSize,
-                    textSpacing: textSpacing
-                ))
-                hasRenderedTitle = true
-                pendingBlocks.removeAll(keepingCapacity: true)
-                if let pdf = PDFDocument(url: attachment.url) {
-                    pages.append(contentsOf: (0..<pdf.pageCount).compactMap { index in
-                        guard let page = pdf.page(at: index) else { return nil }
-                        return ExportPage(page: page, fitToContent: true)
-                    })
-                }
-            }
-        }
-
-        if !pendingBlocks.isEmpty || !hasRenderedTitle {
+        func flushPendingBlocks() throws -> [ExportPage] {
+            guard !pendingBlocks.isEmpty else { return [] }
             let pendingHTML = html(
                 for: note,
                 source: pendingBlocks.joined(separator: "\n\n"),
-                includeTitle: !hasRenderedTitle,
+                includeTitle: shouldIncludeTitle,
                 attachmentPresentation: attachmentPresentation,
                 store: store,
                 assetDirectory: assetDirectory,
@@ -805,13 +839,39 @@ enum NoteExportService {
                 textScale: textScale,
                 textSpacing: textSpacing
             )
-            pages.append(contentsOf: try textPages(
+            pendingBlocks.removeAll(keepingCapacity: true)
+            shouldIncludeTitle = false
+            return try textPages(
                 from: pendingHTML,
                 assetDirectory: assetDirectory,
                 pageSize: paperSize.pageSize,
                 textSpacing: textSpacing
-            ))
+            )
         }
+
+        for (index, rawBlock) in blocks.enumerated() {
+            let block = rawBlock.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !block.isEmpty || index == 0 else { continue }
+            if let attachment = attachment(in: block, note: note, baseURL: baseURL, store: store) {
+                pages.append(contentsOf: try flushPendingBlocks())
+                if let pdf = PDFDocument(url: attachment.url) {
+                    pages.append(contentsOf: (0..<pdf.pageCount).compactMap { index in
+                        guard let page = pdf.page(at: index) else { return nil }
+                        guard !isVisuallyBlankPDFPage(page) else { return nil }
+                        return ExportPage(page: page, fitToContent: true)
+                    })
+                } else {
+                    // Expanded non-PDF attachments render at their boundary. PDF
+                    // attachments begin directly with their first native page.
+                    pendingBlocks.append(block)
+                    pages.append(contentsOf: try flushPendingBlocks())
+                }
+            } else {
+                pendingBlocks.append(block)
+            }
+        }
+
+        pages.append(contentsOf: try flushPendingBlocks())
         return pages
     }
 
@@ -834,46 +894,38 @@ enum NoteExportService {
         }
         let rendered = NSMutableAttributedString(attributedString: attributed)
         applyTextSpacing(to: rendered, factor: textSpacing)
-        replaceAssetTokens(in: rendered, assetDirectory: assetDirectory)
-
         let contentWidth = pageSize.width - 96
-        let contentHeight = pageSize.height - 80
+        replaceAssetTokens(
+            in: rendered,
+            assetDirectory: assetDirectory,
+            maximumWidth: contentWidth
+        )
+        let pageHeight = pageSize.height - 80
+        let textHeight = pageHeight - 96
         let textStorage = NSTextStorage(attributedString: rendered)
         let layoutManager = NSLayoutManager()
-        let textContainer = NSTextContainer(
-            size: NSSize(width: contentWidth, height: CGFloat.greatestFiniteMagnitude)
-        )
-        textContainer.lineFragmentPadding = 0
-        layoutManager.addTextContainer(textContainer)
         textStorage.addLayoutManager(layoutManager)
-        layoutManager.ensureLayout(for: textContainer)
-        let usedRect = layoutManager.usedRect(for: textContainer)
-        let usedHeight = max(96, usedRect.maxY + 96)
-        let pageCount = max(1, Int(ceil(usedHeight / contentHeight)))
+        var containers: [NSTextContainer] = []
+        var renderedGlyphs = 0
+        repeat {
+            let container = NSTextContainer(size: NSSize(width: contentWidth, height: textHeight))
+            container.lineFragmentPadding = 0
+            layoutManager.addTextContainer(container)
+            layoutManager.ensureLayout(for: container)
+            containers.append(container)
+            let range = layoutManager.glyphRange(for: container)
+            renderedGlyphs = max(renderedGlyphs, NSMaxRange(range))
+        } while renderedGlyphs < layoutManager.numberOfGlyphs && containers.count < 10_000
 
-        return try (0..<pageCount).map { pageIndex in
-            let pageY = CGFloat(pageIndex) * contentHeight
-            let pageData = NSMutableData()
-            var mediaBox = CGRect(x: 0, y: 0, width: pageSize.width, height: contentHeight)
-            guard let consumer = CGDataConsumer(data: pageData),
-                  let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
-                throw NoteExportError.couldNotCreatePDF
-            }
-            context.beginPDFPage([kCGPDFContextMediaBox as String: mediaBox] as CFDictionary)
-            context.saveGState()
-            let graphicsContext = NSGraphicsContext(cgContext: context, flipped: true)
-            NSGraphicsContext.saveGraphicsState()
-            NSGraphicsContext.current = graphicsContext
-            let pageRect = NSRect(x: 0, y: pageY, width: contentWidth, height: contentHeight)
-            let glyphRange = layoutManager.glyphRange(forBoundingRect: pageRect, in: textContainer)
-            let drawOrigin = NSPoint(x: 48, y: 48 - pageY)
-            layoutManager.drawBackground(forGlyphRange: glyphRange, at: drawOrigin)
-            layoutManager.drawGlyphs(forGlyphRange: glyphRange, at: drawOrigin)
-            NSGraphicsContext.restoreGraphicsState()
-            context.restoreGState()
-            context.endPDFPage()
-            context.closePDF()
-            guard let pageDocument = PDFDocument(data: pageData as Data),
+        return try containers.map { container in
+            let glyphRange = layoutManager.glyphRange(for: container)
+            let pageView = ExportTextPageView(
+                frame: NSRect(x: 0, y: 0, width: pageSize.width, height: pageHeight),
+                layoutManager: layoutManager,
+                glyphRange: glyphRange,
+                drawOrigin: NSPoint(x: 48, y: 48)
+            )
+            guard let pageDocument = PDFDocument(data: pageView.dataWithPDF(inside: pageView.bounds)),
                   let page = pageDocument.page(at: 0) else {
                 throw NoteExportError.couldNotCreatePDF
             }
@@ -926,6 +978,7 @@ enum NoteExportService {
             if let pdf = PDFDocument(url: attachment.url) {
                 pages.append(contentsOf: (0..<pdf.pageCount).compactMap { index in
                     guard let page = pdf.page(at: index) else { return nil }
+                    guard !isVisuallyBlankPDFPage(page) else { return nil }
                     return ExportPage(page: page, fitToContent: true)
                 })
             } else if ["md", "markdown", "mdown", "mkd"].contains(attachment.url.pathExtension.lowercased()),
@@ -959,7 +1012,11 @@ enum NoteExportService {
         "[[FREEFLOW_ASSET:\(fileName):\(Int(size.width)):\(Int(size.height))]]"
     }
 
-    private static func replaceAssetTokens(in attributed: NSMutableAttributedString, assetDirectory: URL) {
+    private static func replaceAssetTokens(
+        in attributed: NSMutableAttributedString,
+        assetDirectory: URL,
+        maximumWidth: CGFloat
+    ) {
         let pattern = #"\[\[FREEFLOW_ASSET:([^:\]]+):(\d+):(\d+)\]\]"#
         guard let expression = try? NSRegularExpression(pattern: pattern) else { return }
         while true {
@@ -967,8 +1024,11 @@ enum NoteExportService {
             guard let match = expression.firstMatch(in: attributed.string, range: range) else { return }
             let value = attributed.string as NSString
             let fileName = value.substring(with: match.range(at: 1))
-            let width = CGFloat(Double(value.substring(with: match.range(at: 2))) ?? 1)
-            let height = CGFloat(Double(value.substring(with: match.range(at: 3))) ?? 1)
+            let requestedWidth = CGFloat(Double(value.substring(with: match.range(at: 2))) ?? 1)
+            let requestedHeight = CGFloat(Double(value.substring(with: match.range(at: 3))) ?? 1)
+            let scale = min(1, maximumWidth / max(1, requestedWidth))
+            let width = max(1, floor(requestedWidth * scale))
+            let height = max(1, floor(requestedHeight * scale))
             let imageURL = assetDirectory.appendingPathComponent(fileName)
             if let imageData = try? Data(contentsOf: imageURL),
                let image = NSImage(data: imageData) {
@@ -993,12 +1053,70 @@ enum NoteExportService {
         }
     }
 
+    private static func isVisuallyBlankPDFPage(_ page: PDFPage) -> Bool {
+        let thumbnail = page.thumbnail(of: NSSize(width: 96, height: 96), for: .mediaBox)
+        var proposedRect = NSRect(origin: .zero, size: thumbnail.size)
+        guard let image = thumbnail.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil),
+              let data = image.dataProvider?.data,
+              let bytes = CFDataGetBytePtr(data) else {
+            return false
+        }
+
+        let bytesPerPixel = max(1, image.bitsPerPixel / 8)
+        guard bytesPerPixel >= 3 else { return false }
+        let bytesPerRow = image.bytesPerRow
+        var nonWhitePixels = 0
+        let allowedNonWhitePixels = max(4, image.width * image.height / 1000)
+        for y in 0..<image.height {
+            let row = bytes + y * bytesPerRow
+            for x in 0..<image.width {
+                let pixel = row + x * bytesPerPixel
+                if pixel[0] < 248 || pixel[1] < 248 || pixel[2] < 248 {
+                    nonWhitePixels += 1
+                    if nonWhitePixels > allowedNonWhitePixels { return false }
+                }
+            }
+        }
+        return true
+    }
+
     private static func htmlEscape(_ value: String) -> String {
         value
             .replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
             .replacingOccurrences(of: "\"", with: "&quot;")
+    }
+}
+
+private final class ExportTextPageView: NSView {
+    private let layoutManager: NSLayoutManager
+    private let glyphRange: NSRange
+    private let drawOrigin: NSPoint
+
+    init(
+        frame: NSRect,
+        layoutManager: NSLayoutManager,
+        glyphRange: NSRange,
+        drawOrigin: NSPoint
+    ) {
+        self.layoutManager = layoutManager
+        self.glyphRange = glyphRange
+        self.drawOrigin = drawOrigin
+        super.init(frame: frame)
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        NSBezierPath(rect: bounds.intersection(dirtyRect)).addClip()
+        layoutManager.drawBackground(forGlyphRange: glyphRange, at: drawOrigin)
+        layoutManager.drawGlyphs(forGlyphRange: glyphRange, at: drawOrigin)
     }
 }
 
