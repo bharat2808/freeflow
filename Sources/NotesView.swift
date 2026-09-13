@@ -595,7 +595,8 @@ struct NotesView: View {
 
     @ViewBuilder
     private var noteRecordingStatus: some View {
-        if appState.isRecording || appState.isTranscribing {
+        if (appState.isRecording || appState.isTranscribing),
+           appState.shouldShowNoteRecordingPreview {
             VStack(alignment: .leading, spacing: 8) {
                 Label(
                     appState.noteUpdateTargetID == nil

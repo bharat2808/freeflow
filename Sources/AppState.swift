@@ -482,6 +482,14 @@ final class AppState: ObservableObject, @unchecked Sendable {
     var localPreviewService: LocalWhisperPreviewSession?
     var automaticTerminationDisabled = false
     var activeAudioInterruption: ActiveAudioInterruption?
+
+    var shouldShowNoteRecordingPreview: Bool {
+        activeNoteRecording
+            || pendingNoteRecording
+            || activeNewNoteID != nil
+            || activeNoteUpdateTargetID != nil
+            || noteUpdateTargetID != nil
+    }
     var pendingOverlayDismissToken: UUID?
     var shouldMonitorHotkeys = false
     var isCapturingShortcut = false
