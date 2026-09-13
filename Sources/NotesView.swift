@@ -730,13 +730,27 @@ struct NotesView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
-            notesSidebar
-        } detail: {
-            notesDetail
+        ZStack {
+            NavigationSplitView {
+                notesSidebar
+            } detail: {
+                notesDetail
+            }
+
+            if showPDFPreview {
+                pdfPreviewSheet
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .zIndex(1)
+                    .transition(.opacity)
+            }
         }
         .onChange(of: library.selectedID) { _ in
             editorSelection = NSRange(location: 0, length: 0)
+            if showPDFPreview {
+                pdfPreviewRegenerationTask?.cancel()
+                showPDFPreview = false
+            }
         }
         .toolbar {
             ToolbarItem {
@@ -778,9 +792,6 @@ struct NotesView: View {
         }
         .sheet(isPresented: $showMoveSheet) {
             moveNoteSheet
-        }
-        .sheet(isPresented: $showPDFPreview) {
-            pdfPreviewSheet
         }
         .alert("Delete Note?", isPresented: $showDeleteConfirmation) {
             Button("Cancel", role: .cancel) {}

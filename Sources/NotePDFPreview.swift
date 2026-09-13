@@ -102,7 +102,7 @@ struct NotePDFPreviewSheet: View {
                     Label("Paper: \(paperSize.title)", systemImage: "doc.plaintext")
                 }
                 .menuStyle(.borderlessButton)
-                Button("Cancel", action: onCancel)
+                Button("Back", action: onCancel)
                 Button("Save as PDF…", action: onSave)
                     .buttonStyle(.bordered)
                 Button("Share…", action: onShare)
@@ -114,7 +114,7 @@ struct NotePDFPreviewSheet: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color(nsColor: .underPageBackgroundColor))
         }
-        .frame(minWidth: 900, minHeight: 720)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
