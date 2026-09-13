@@ -73,8 +73,36 @@ enum NoteExportService {
             .appendingPathComponent("freeflow-note-export-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: assetDirectory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: assetDirectory) }
+        let source = sourceWithoutTitle(note.markdown)
+        let pageSize = paperSize.pageSize
+        let pageChromeHeight: CGFloat = 80
+        let contentPageHeight = pageSize.height - pageChromeHeight
+
+        if attachmentPresentation == .expanded,
+           containsExpandedAttachment(in: source, note: note, baseURL: store.noteFolderURL(for: note), store: store) {
+            let pages = try orderedExpandedPages(
+                for: source,
+                note: note,
+                baseURL: store.noteFolderURL(for: note),
+                attachmentPresentation: attachmentPresentation,
+                store: store,
+                assetDirectory: assetDirectory,
+                paperSize: paperSize,
+                textScale: textScale,
+                textSpacing: textSpacing
+            )
+            return try makePDFWithPageChrome(
+                pages: pages,
+                note: note,
+                pageSize: pageSize,
+                contentPageHeight: contentPageHeight
+            )
+        }
+
         let html = html(
             for: note,
+            source: source,
+            includeTitle: true,
             attachmentPresentation: attachmentPresentation,
             store: store,
             assetDirectory: assetDirectory,
@@ -101,7 +129,6 @@ enum NoteExportService {
         applyTextSpacing(to: renderedAttributed, factor: textSpacing)
         replaceAssetTokens(in: renderedAttributed, assetDirectory: assetDirectory)
 
-        let pageSize = paperSize.pageSize
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: pageSize.width, height: 100_000))
         textView.isEditable = false
         textView.isSelectable = false
@@ -115,8 +142,6 @@ enum NoteExportService {
         )
         textView.frame.size.height = usedHeight
 
-        let pageChromeHeight: CGFloat = 80
-        let contentPageHeight = pageSize.height - pageChromeHeight
         let pageCount = max(1, Int(ceil(usedHeight / contentPageHeight)))
         var pages: [ExportPage] = []
         for pageIndex in 0..<pageCount {
@@ -250,6 +275,8 @@ enum NoteExportService {
 
     private static func html(
         for note: MarkdownNote,
+        source: String,
+        includeTitle: Bool,
         attachmentPresentation: NoteAttachmentPresentation,
         store: MarkdownNoteStore,
         assetDirectory: URL,
@@ -257,7 +284,6 @@ enum NoteExportService {
         textScale: CGFloat,
         textSpacing: CGFloat
     ) -> String {
-        let source = sourceWithoutTitle(note.markdown)
         let contentWidth = paperSize.pageSize.width - 96
         let body = renderedBody(
             source,
@@ -267,6 +293,8 @@ enum NoteExportService {
             store: store,
             assetDirectory: assetDirectory
         )
+
+        let title = includeTitle ? "<h1>\(htmlEscape(note.title))</h1><div class=\"subtitle\">\(note.modified.formatted(date: .long, time: .shortened))</div>" : ""
 
         return """
         <!doctype html>
@@ -295,8 +323,7 @@ enum NoteExportService {
         .diagram-image { display: block; width: 100%; max-width: \(contentWidth)px; height: auto; }
         pre { white-space: pre-wrap; font-family: Menlo, monospace; font-size: 9pt; background: #f3f3f3; padding: 10px; }
         </style></head><body>
-        <h1>\(htmlEscape(note.title))</h1>
-        <div class="subtitle">\(note.modified.formatted(date: .long, time: .shortened))</div>
+        \(title)
         \(body)
         </body></html>
         """
@@ -697,6 +724,193 @@ enum NoteExportService {
         }
 
         return attachmentCard(attachment)
+    }
+
+    private static func containsExpandedAttachment(
+        in source: String,
+        note: MarkdownNote?,
+        baseURL: URL,
+        store: MarkdownNoteStore
+    ) -> Bool {
+        attachmentAwareBlocks(source, note: note, baseURL: baseURL, store: store).contains { block in
+            guard attachment(
+                in: block.trimmingCharacters(in: .whitespacesAndNewlines),
+                note: note,
+                baseURL: baseURL,
+                store: store
+            ) != nil else { return false }
+            return true
+        }
+    }
+
+    private static func orderedExpandedPages(
+        for source: String,
+        note: MarkdownNote,
+        baseURL: URL,
+        attachmentPresentation: NoteAttachmentPresentation,
+        store: MarkdownNoteStore,
+        assetDirectory: URL,
+        paperSize: NotePaperSize,
+        textScale: CGFloat,
+        textSpacing: CGFloat
+    ) throws -> [ExportPage] {
+        let rawBlocks = attachmentAwareBlocks(source, note: note, baseURL: baseURL, store: store)
+        let blocks = rawBlocks.isEmpty ? [""] : rawBlocks
+        var pages: [ExportPage] = []
+        var pendingBlocks: [String] = []
+        var hasRenderedTitle = false
+
+        for (index, rawBlock) in blocks.enumerated() {
+            let block = rawBlock.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !block.isEmpty || index == 0 else { continue }
+            pendingBlocks.append(block)
+            if let attachment = attachment(in: block, note: note, baseURL: baseURL, store: store) {
+                let pendingHTML = html(
+                    for: note,
+                    source: pendingBlocks.joined(separator: "\n\n"),
+                    includeTitle: !hasRenderedTitle,
+                    attachmentPresentation: attachmentPresentation,
+                    store: store,
+                    assetDirectory: assetDirectory,
+                    paperSize: paperSize,
+                    textScale: textScale,
+                    textSpacing: textSpacing
+                )
+                pages.append(contentsOf: try textPages(
+                    from: pendingHTML,
+                    assetDirectory: assetDirectory,
+                    pageSize: paperSize.pageSize,
+                    textSpacing: textSpacing
+                ))
+                hasRenderedTitle = true
+                pendingBlocks.removeAll(keepingCapacity: true)
+                if let pdf = PDFDocument(url: attachment.url) {
+                    pages.append(contentsOf: (0..<pdf.pageCount).compactMap { index in
+                        guard let page = pdf.page(at: index) else { return nil }
+                        return ExportPage(page: page, fitToContent: true)
+                    })
+                }
+            }
+        }
+
+        if !pendingBlocks.isEmpty || !hasRenderedTitle {
+            let pendingHTML = html(
+                for: note,
+                source: pendingBlocks.joined(separator: "\n\n"),
+                includeTitle: !hasRenderedTitle,
+                attachmentPresentation: attachmentPresentation,
+                store: store,
+                assetDirectory: assetDirectory,
+                paperSize: paperSize,
+                textScale: textScale,
+                textSpacing: textSpacing
+            )
+            pages.append(contentsOf: try textPages(
+                from: pendingHTML,
+                assetDirectory: assetDirectory,
+                pageSize: paperSize.pageSize,
+                textSpacing: textSpacing
+            ))
+        }
+        return pages
+    }
+
+    private static func textPages(
+        from html: String,
+        assetDirectory: URL,
+        pageSize: NSSize,
+        textSpacing: CGFloat
+    ) throws -> [ExportPage] {
+        guard let attributed = try? NSAttributedString(
+            data: Data(html.utf8),
+            options: [
+                .documentType: NSAttributedString.DocumentType.html,
+                .characterEncoding: String.Encoding.utf8.rawValue,
+                .baseURL: assetDirectory
+            ],
+            documentAttributes: nil
+        ) else {
+            throw NoteExportError.couldNotCreatePDF
+        }
+        let rendered = NSMutableAttributedString(attributedString: attributed)
+        applyTextSpacing(to: rendered, factor: textSpacing)
+        replaceAssetTokens(in: rendered, assetDirectory: assetDirectory)
+
+        let contentWidth = pageSize.width - 96
+        let contentHeight = pageSize.height - 80
+        let textStorage = NSTextStorage(attributedString: rendered)
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(
+            size: NSSize(width: contentWidth, height: CGFloat.greatestFiniteMagnitude)
+        )
+        textContainer.lineFragmentPadding = 0
+        layoutManager.addTextContainer(textContainer)
+        textStorage.addLayoutManager(layoutManager)
+        layoutManager.ensureLayout(for: textContainer)
+        let usedRect = layoutManager.usedRect(for: textContainer)
+        let usedHeight = max(96, usedRect.maxY + 96)
+        let pageCount = max(1, Int(ceil(usedHeight / contentHeight)))
+
+        return try (0..<pageCount).map { pageIndex in
+            let pageY = CGFloat(pageIndex) * contentHeight
+            let pageData = NSMutableData()
+            var mediaBox = CGRect(x: 0, y: 0, width: pageSize.width, height: contentHeight)
+            guard let consumer = CGDataConsumer(data: pageData),
+                  let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
+                throw NoteExportError.couldNotCreatePDF
+            }
+            context.beginPDFPage([kCGPDFContextMediaBox as String: mediaBox] as CFDictionary)
+            context.saveGState()
+            let graphicsContext = NSGraphicsContext(cgContext: context, flipped: true)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = graphicsContext
+            let pageRect = NSRect(x: 0, y: pageY, width: contentWidth, height: contentHeight)
+            let glyphRange = layoutManager.glyphRange(forBoundingRect: pageRect, in: textContainer)
+            let drawOrigin = NSPoint(x: 48, y: 48 - pageY)
+            layoutManager.drawBackground(forGlyphRange: glyphRange, at: drawOrigin)
+            layoutManager.drawGlyphs(forGlyphRange: glyphRange, at: drawOrigin)
+            NSGraphicsContext.restoreGraphicsState()
+            context.restoreGState()
+            context.endPDFPage()
+            context.closePDF()
+            guard let pageDocument = PDFDocument(data: pageData as Data),
+                  let page = pageDocument.page(at: 0) else {
+                throw NoteExportError.couldNotCreatePDF
+            }
+            return ExportPage(page: page, fitToContent: false)
+        }
+    }
+
+    private static func attachmentAwareBlocks(
+        _ source: String,
+        note: MarkdownNote?,
+        baseURL: URL,
+        store: MarkdownNoteStore
+    ) -> [String] {
+        source.components(separatedBy: "\n\n").flatMap { paragraph in
+            let lines = paragraph.components(separatedBy: "\n")
+            var blocks: [String] = []
+            var textLines: [String] = []
+
+            func flushText() {
+                let value = textLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !value.isEmpty { blocks.append(value) }
+                textLines.removeAll(keepingCapacity: true)
+            }
+
+            for line in lines {
+                let value = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !value.isEmpty,
+                   attachment(in: value, note: note, baseURL: baseURL, store: store) != nil {
+                    flushText()
+                    blocks.append(value)
+                } else {
+                    textLines.append(line)
+                }
+            }
+            flushText()
+            return blocks
+        }
     }
 
     private static func expandedPDFPages(
