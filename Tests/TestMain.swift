@@ -4,6 +4,7 @@ import Foundation
 struct FreeFlowTests {
     static func main() {
         MarkdownNoteStoreTests.run()
+        MarkdownTableEditorTests.run()
         LocalWhisperTranscriptionServiceTests.run()
         AppContextServiceTests.run()
         ModelConfigurationTests.run()

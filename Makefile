@@ -15,6 +15,7 @@ TEST_RUNNER = $(BUILD_DIR)/FreeFlowTests
 WHISPER_BRIDGE_OBJECT = $(BUILD_DIR)/WhisperBridge.o
 TEST_PRODUCTION_SOURCES = \
 	Sources/MarkdownNoteStore.swift \
+	Sources/MarkdownTableEditor.swift \
 	Sources/LocalWhisperTranscriptionService.swift \
 	Sources/TranscriptionService.swift \
 	Sources/AppContextService.swift \
@@ -147,7 +148,7 @@ $(BUILD_DIR)/libMarkdownUI-%.a: Package.swift Sources/PackageSupport/PackageSupp
 	swift build --target MarkdownUIBridge --arch "$*" --disable-sandbox
 	@libtool -static -o "$@" $$(find ".build/$*-apple-macosx/debug" -type f -name '*.o' ! -path '*/MarkdownUIBridge.build/*' | LC_ALL=C sort)
 
-test: $(WHISPER_BRIDGE_OBJECT)
+test: $(WHISPER_BRIDGE_OBJECT) $(MARKDOWNUI_REQUIRED_ARCHIVES)
 	@mkdir -p "$(BUILD_DIR)"
 	swiftc \
 		-parse-as-library \
@@ -155,8 +156,9 @@ test: $(WHISPER_BRIDGE_OBJECT)
 		-o "$(TEST_RUNNER)" \
 		-sdk $(shell xcrun --show-sdk-path) \
 		-target $(ARCH)-apple-macosx13.0 \
+		-I "$(MARKDOWNUI_BUILD_DIR)/Modules" \
 		$(TEST_PRODUCTION_SOURCES) $(WHISPER_BRIDGE_OBJECT) \
-		$(TEST_SOURCES)
+		$(TEST_SOURCES) "$(MARKDOWNUI_ARCHIVE)"
 	@$(TEST_RUNNER)
 
 ifeq ($(ARCH),universal)

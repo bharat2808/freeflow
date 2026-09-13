@@ -1,5 +1,6 @@
 import AppKit
 import MarkdownUI
+import PDFKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -323,6 +324,19 @@ struct NotesView: View {
     @State private var presetError: String?
     @State private var textPresetPreview: TextPresetPreview?
     @State private var customTextPrompt = ""
+    @State private var showSharePopover = false
+    @State private var showPDFPreview = false
+    @State private var pdfPreviewDocument: PDFDocument?
+    @State private var pdfPreviewNote: MarkdownNote?
+    @State private var pdfPreviewAttachmentPresentationRaw = NoteAttachmentPresentation.expanded.rawValue
+    @State private var pdfPreviewTextScale = 1.0
+    @State private var pdfPreviewTextSpacing = 1.0
+    @State private var pdfPreviewRegenerationTask: Task<Void, Never>?
+    @State private var showSavedPDFAlert = false
+    @State private var savedPDFURL: URL?
+    @AppStorage("notes.attachmentPresentation") private var attachmentPresentationRaw = NoteAttachmentPresentation.expanded.rawValue
+    @AppStorage("notes.pdfTextScale") private var savedPDFTextScale = 1.0
+    @AppStorage("notes.pdfTextSpacing") private var savedPDFTextSpacing = 1.0
 
     private struct TextPresetPreview {
         let noteID: UUID
@@ -688,11 +702,14 @@ struct NotesView: View {
                     noteHeader(note)
                     if preview {
                         ScrollView {
-                            NoteMarkdownPreview(markdown: note.markdown, note: note)
+                            NoteMarkdownPreview(markdown: note.markdown, note: note) { block, table, layout in
+                                replaceMarkdownTable(block, with: table, layout: layout, in: note.id)
+                            }
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(28)
                         }
+                        .clipped()
                     } else {
                         noteEditor(for: note)
                     }
@@ -760,6 +777,9 @@ struct NotesView: View {
         .sheet(isPresented: $showMoveSheet) {
             moveNoteSheet
         }
+        .sheet(isPresented: $showPDFPreview) {
+            pdfPreviewSheet
+        }
         .alert("Delete Note?", isPresented: $showDeleteConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {
@@ -780,6 +800,16 @@ struct NotesView: View {
             }
         } message: {
             Text("Notes in this folder will be moved to Inbox, then the folder will be deleted.")
+        }
+        .alert("PDF Saved", isPresented: $showSavedPDFAlert) {
+            Button("Show in Folder") {
+                if let savedPDFURL {
+                    NSWorkspace.shared.activateFileViewerSelecting([savedPDFURL])
+                }
+            }
+            Button("Done", role: .cancel) {}
+        } message: {
+            Text(savedPDFURL?.lastPathComponent ?? "Your PDF was saved successfully.")
         }
     }
 
@@ -838,6 +868,52 @@ struct NotesView: View {
         }
         .padding(24)
         .frame(width: 360)
+    }
+
+    @ViewBuilder
+    private var pdfPreviewSheet: some View {
+        if let pdfPreviewDocument, let pdfPreviewNote {
+            NotePDFPreviewSheet(
+                note: pdfPreviewNote,
+                document: pdfPreviewDocument,
+                attachmentPresentation: NoteAttachmentPresentation(
+                    rawValue: pdfPreviewAttachmentPresentationRaw
+                ) ?? .expanded,
+                textScale: pdfPreviewTextScale,
+                textSpacing: pdfPreviewTextSpacing,
+                onAttachmentPresentationChange: { presentation in
+                    pdfPreviewRegenerationTask?.cancel()
+                    regeneratePDFPreview(for: pdfPreviewNote, presentation: presentation, textScale: pdfPreviewTextScale, textSpacing: pdfPreviewTextSpacing)
+                },
+                onTextScaleChange: { scale in
+                    let normalizedScale = min(max(scale, 0.7), 1.4)
+                    pdfPreviewTextScale = normalizedScale
+                    savedPDFTextScale = normalizedScale
+
+                    schedulePDFPreviewRegeneration()
+                },
+                onTextSpacingChange: { spacing in
+                    let normalizedSpacing = min(max(spacing, 0.5), 2.0)
+                    pdfPreviewTextSpacing = normalizedSpacing
+                    savedPDFTextSpacing = normalizedSpacing
+                    schedulePDFPreviewRegeneration()
+                },
+                onSave: {
+                    guard let data = pdfPreviewDocument.dataRepresentation() else { return }
+                    savePDF(data: data, for: pdfPreviewNote)
+                },
+                onShare: {
+                    guard let data = pdfPreviewDocument.dataRepresentation() else { return }
+                    sharePDF(data: data, for: pdfPreviewNote)
+                },
+                onCancel: {
+                    showPDFPreview = false
+                }
+            )
+        } else {
+            ProgressView("Preparing PDF preview…")
+                .frame(width: 500, height: 300)
+        }
     }
 
     private func textPresetPreviewView(_ preview: TextPresetPreview, note: MarkdownNote) -> some View {
@@ -930,6 +1006,200 @@ struct NotesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .layoutPriority(1)
         .id(note.id)
+    }
+
+    private var attachmentPresentation: NoteAttachmentPresentation {
+        get { NoteAttachmentPresentation(rawValue: attachmentPresentationRaw) ?? .expanded }
+        set { attachmentPresentationRaw = newValue.rawValue }
+    }
+
+    private func copyMarkdown(_ note: MarkdownNote) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(note.markdown, forType: .string)
+    }
+
+    private func makePDFData(
+        for note: MarkdownNote,
+        attachmentPresentation: NoteAttachmentPresentation,
+        textScale: Double = 1,
+        textSpacing: Double = 1
+    ) -> Data? {
+        do {
+            return try NoteExportService.pdfData(
+                for: note,
+                attachmentPresentation: attachmentPresentation,
+                textScale: CGFloat(textScale),
+                textSpacing: CGFloat(textSpacing)
+            )
+        } catch {
+            library.error = error.localizedDescription
+            return nil
+        }
+    }
+
+    private func openPDFPreview(for note: MarkdownNote) {
+        let presentation = attachmentPresentation
+        pdfPreviewRegenerationTask?.cancel()
+        pdfPreviewTextScale = min(max(savedPDFTextScale, 0.7), 1.4)
+        pdfPreviewTextSpacing = min(max(savedPDFTextSpacing, 0.5), 2.0)
+        guard let data = makePDFData(for: note, attachmentPresentation: presentation, textScale: pdfPreviewTextScale, textSpacing: pdfPreviewTextSpacing),
+              let document = PDFDocument(data: data) else { return }
+        pdfPreviewNote = note
+        pdfPreviewDocument = document
+        pdfPreviewAttachmentPresentationRaw = presentation.rawValue
+        showPDFPreview = true
+    }
+
+    private func regeneratePDFPreview(
+        for note: MarkdownNote,
+        presentation: NoteAttachmentPresentation,
+        textScale: Double,
+        textSpacing: Double
+    ) {
+        guard let data = makePDFData(for: note, attachmentPresentation: presentation, textScale: textScale, textSpacing: textSpacing),
+              let document = PDFDocument(data: data) else { return }
+        pdfPreviewAttachmentPresentationRaw = presentation.rawValue
+        pdfPreviewDocument = document
+    }
+
+    private func schedulePDFPreviewRegeneration() {
+        pdfPreviewRegenerationTask?.cancel()
+        let note = pdfPreviewNote
+        let presentation = NoteAttachmentPresentation(rawValue: pdfPreviewAttachmentPresentationRaw) ?? .expanded
+        let textScale = pdfPreviewTextScale
+        let textSpacing = pdfPreviewTextSpacing
+        pdfPreviewRegenerationTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled, let note else { return }
+            regeneratePDFPreview(
+                for: note,
+                presentation: presentation,
+                textScale: textScale,
+                textSpacing: textSpacing
+            )
+        }
+    }
+
+    private func savePDF(data: Data, for note: MarkdownNote) {
+        let fileName = note.title
+            .replacingOccurrences(of: "[^A-Za-z0-9._-]+", with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        let panel = NSSavePanel()
+        panel.title = "Save Note as PDF"
+        panel.nameFieldStringValue = (fileName.isEmpty ? "Note" : fileName) + ".pdf"
+        panel.allowedContentTypes = [.pdf]
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let destinationURL = panel.url else { return }
+        do {
+            try data.write(to: destinationURL, options: .atomic)
+            showPDFPreview = false
+            savedPDFURL = destinationURL
+            showSavedPDFAlert = true
+        } catch {
+            library.error = "Could not save PDF: \(error.localizedDescription)"
+        }
+    }
+
+    private func sharePDF(data: Data, for note: MarkdownNote) {
+        let fileName = note.title
+            .replacingOccurrences(of: "[^A-Za-z0-9._-]+", with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent((fileName.isEmpty ? "Note" : fileName) + ".pdf")
+        do {
+            try data.write(to: url, options: .atomic)
+        } catch {
+            library.error = "Could not prepare PDF: \(error.localizedDescription)"
+            return
+        }
+        showPDFPreview = false
+        DispatchQueue.main.async {
+            guard let anchor = NSApp.keyWindow?.contentView else { return }
+            let picker = NSSharingServicePicker(items: [url])
+            picker.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+        }
+    }
+
+    private func sharePopover(for note: MarkdownNote) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                showSharePopover = false
+                openPDFPreview(for: note)
+            } label: {
+                Label("Share Note…", systemImage: "square.and.arrow.up")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.borderless)
+
+            Button {
+                showSharePopover = false
+                openPDFPreview(for: note)
+            } label: {
+                Label("Save as PDF…", systemImage: "arrow.down.doc")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.borderless)
+
+            Button {
+                showSharePopover = false
+                copyMarkdown(note)
+            } label: {
+                Label("Copy Markdown", systemImage: "doc.on.doc")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.borderless)
+
+            Divider()
+
+            Menu {
+                ForEach(NoteAttachmentPresentation.allCases, id: \.rawValue) { presentation in
+                    Button {
+                        attachmentPresentationRaw = presentation.rawValue
+                    } label: {
+                        HStack {
+                            Text(presentation.title)
+                            if attachmentPresentation == presentation {
+                                Spacer()
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                Label("Attachment presentation", systemImage: "paperclip")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .menuStyle(.borderlessButton)
+        }
+        .padding(12)
+        .frame(width: 230)
+    }
+
+    private func replaceMarkdownTable(
+        _ block: MarkdownTableBlock,
+        with table: MarkdownTable,
+        layout: MarkdownTableLayout,
+        in noteID: UUID
+    ) -> Bool {
+        guard let note = library.notes.first(where: { $0.id == noteID }) else { return false }
+        let source = note.markdown as NSString
+        guard block.range.location >= 0,
+              NSMaxRange(block.range) <= source.length,
+              source.substring(with: block.range) == block.source else { return false }
+        let updated = source.replacingCharacters(in: block.range, with: table.markdown)
+        do {
+            try MarkdownTableLayoutStore.save(
+                layout,
+                note: note,
+                tableIndex: block.tableIndex,
+                table: table
+            )
+        } catch {
+            library.error = "Could not save table layout: \(error.localizedDescription)"
+            return false
+        }
+        library.edit(id: noteID, markdown: updated)
+        return true
     }
 
     private var noteStatusFooter: some View {
@@ -1102,6 +1372,17 @@ struct NotesView: View {
                 textPresetPopover
             }
             Button {
+                showSharePopover.toggle()
+            } label: {
+                NotesHeaderIconControl(systemName: "square.and.arrow.up")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Share")
+            .help("Share or export this note")
+            .popover(isPresented: $showSharePopover, arrowEdge: .top) {
+                sharePopover(for: note)
+            }
+            Button {
                 chooseAttachment(for: note)
             } label: {
                 NotesHeaderIconControl(systemName: "paperclip")
@@ -1121,7 +1402,8 @@ struct NotesView: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
-        .background(.quaternary.opacity(0.35))
+        .background(Color(nsColor: .windowBackgroundColor))
+        .zIndex(10)
     }
 
     private func noteRow(_ note: MarkdownNote) -> some View {
