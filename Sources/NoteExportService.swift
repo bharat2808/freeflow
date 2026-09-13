@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Foundation
 import PDFKit
 import UniformTypeIdentifiers
@@ -326,7 +327,7 @@ enum NoteExportService {
         .pdf-page { display: block; width: auto; max-width: \(contentWidth)px; max-height: 730px; object-fit: contain; margin: 10px auto; page-break-inside: avoid; }
         .diagram { margin: 14px 0; page-break-inside: avoid; }
         .diagram-image { display: block; width: 100%; max-width: \(contentWidth)px; height: auto; }
-        pre { white-space: pre-wrap; font-family: Menlo, monospace; font-size: 9pt; background: #f3f3f3; padding: 10px; }
+        pre { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; max-width: (contentWidth)px; box-sizing: border-box; font-family: Menlo, monospace; font-size: (9 * textScale)pt; line-height: (1.2 + (0.15 * textSpacing)); background: #f3f3f3; padding: 10px; }
         </style></head><body>
         \(title)
         \(body)
@@ -770,6 +771,11 @@ enum NoteExportService {
             return "<div class=\"attachment\"><div class=\"attachment-title\">\(htmlEscape(attachment.label))</div>\(assetToken(fileName: imageURL.lastPathComponent, size: NSSize(width: 499, height: 499)))</div>"
         }
 
+        if UTType(filenameExtension: attachment.url.pathExtension)?.conforms(to: .movie) == true,
+           let image = videoThumbnail(for: attachment.url, assetDirectory: assetDirectory) {
+            return "<div class=\"attachment\"><div class=\"attachment-title\">\(htmlEscape(attachment.label))</div>\(image)</div>"
+        }
+
         if ["md", "markdown", "mdown", "mkd"].contains(attachment.url.pathExtension.lowercased()),
            let contents = try? String(contentsOf: attachment.url, encoding: .utf8) {
             let nested = renderedBody(
@@ -783,6 +789,11 @@ enum NoteExportService {
             return "<section class=\"attachment-document\"><div class=\"attachment-title\">\(htmlEscape(attachment.label))</div>\(nested)</section>"
         }
 
+        if UTType(filenameExtension: attachment.url.pathExtension)?.conforms(to: .text) == true,
+           let contents = try? String(contentsOf: attachment.url, encoding: .utf8) {
+            return "<section class=\"attachment-document\"><div class=\"attachment-title\">\(htmlEscape(attachment.label))</div><pre class=\"attachment-text\">\(htmlEscape(contents))</pre></section>"
+        }
+
         if let pdf = PDFDocument(url: attachment.url) {
             if pdf.pageCount > 0 {
                 return "<div class=\"attachment\"><div class=\"attachment-title\">\(htmlEscape(attachment.label))</div><div class=\"attachment-meta\">PDF pages included after the note</div></div>"
@@ -790,6 +801,22 @@ enum NoteExportService {
         }
 
         return attachmentCard(attachment)
+    }
+
+    private static func videoThumbnail(for url: URL, assetDirectory: URL) -> String? {
+        let asset = AVAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = NSSize(width: 680, height: 480)
+        guard let image = try? generator.copyCGImage(at: .zero, actualTime: nil) else { return nil }
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        guard let data = bitmap.representation(using: .png, properties: [:]) else { return nil }
+        let imageURL = assetDirectory.appendingPathComponent("video-\(UUID().uuidString).png")
+        guard (try? data.write(to: imageURL, options: .atomic)) != nil else { return nil }
+        return assetToken(
+            fileName: imageURL.lastPathComponent,
+            size: NSSize(width: image.width, height: image.height)
+        )
     }
 
     private static func containsExpandedAttachment(
