@@ -926,6 +926,8 @@ struct NotesView: View {
             importAttachment: { payload in importAttachment(payload, for: note) }
         )
         .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .layoutPriority(1)
         .id(note.id)
     }
 

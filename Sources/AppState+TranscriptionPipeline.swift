@@ -59,7 +59,7 @@ extension AppState {
                 instruction: instruction,
                 context: context,
                 customVocabulary: customVocabulary,
-                customSystemPrompt: Self.resolvedSystemPrompt(generateSystemPrompt),
+                customSystemPrompt: generateSystemPrompt,
                 outputLanguage: outputLanguage
             )
             return (result.transcript, .generationSucceeded, result.prompt)
@@ -422,7 +422,9 @@ extension AppState {
                                     ? MarkdownNoteStore.systemPrompt
                                     : self.noteSystemPrompt)
                                 : (sessionIntent.isGenerateMode
-                                    ? Self.resolvedSystemPrompt(self.generateSystemPrompt)
+                                    ? (self.generateSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                        ? PostProcessingService.defaultGenerateSystemPrompt
+                                        : self.generateSystemPrompt)
                                     : Self.resolvedSystemPrompt(self.customSystemPrompt)),
                             context: appContext,
                             processingStatus: processingStatus,

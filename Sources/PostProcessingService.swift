@@ -344,6 +344,9 @@ Behavior:
             throw PostProcessingError.invalidInput("Generation request must not be empty")
         }
         let vocabularyTerms = mergedVocabularyTerms(rawVocabulary: customVocabulary)
+        let resolvedGeneratePrompt = customSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? Self.defaultGenerateSystemPrompt
+            : customSystemPrompt
         let timeoutSeconds = postProcessingTimeoutSeconds
         return try await withThrowingTaskGroup(of: PostProcessingResult.self) { group in
             group.addTask { [weak self] in
@@ -352,7 +355,7 @@ Behavior:
                     instruction: trimmedInstruction,
                     context: context,
                     customVocabulary: vocabularyTerms,
-                    customSystemPrompt: customSystemPrompt,
+                    customSystemPrompt: resolvedGeneratePrompt,
                     outputLanguage: outputLanguage
                 )
             }
