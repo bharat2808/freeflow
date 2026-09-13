@@ -331,12 +331,14 @@ struct NotesView: View {
     @State private var pdfPreviewAttachmentPresentationRaw = NoteAttachmentPresentation.expanded.rawValue
     @State private var pdfPreviewTextScale = 1.0
     @State private var pdfPreviewTextSpacing = 1.0
+    @State private var pdfPreviewPaperSize = NotePaperSize.a4
     @State private var pdfPreviewRegenerationTask: Task<Void, Never>?
     @State private var showSavedPDFAlert = false
     @State private var savedPDFURL: URL?
     @AppStorage("notes.attachmentPresentation") private var attachmentPresentationRaw = NoteAttachmentPresentation.expanded.rawValue
     @AppStorage("notes.pdfTextScale") private var savedPDFTextScale = 1.0
     @AppStorage("notes.pdfTextSpacing") private var savedPDFTextSpacing = 1.0
+    @AppStorage("notes.pdfPaperSize") private var savedPDFPaperSize = NotePaperSize.a4.rawValue
 
     private struct TextPresetPreview {
         let noteID: UUID
@@ -881,12 +883,13 @@ struct NotesView: View {
                 ) ?? .expanded,
                 textScale: pdfPreviewTextScale,
                 textSpacing: pdfPreviewTextSpacing,
+                paperSize: pdfPreviewPaperSize,
                 onAttachmentPresentationChange: { presentation in
                     pdfPreviewRegenerationTask?.cancel()
-                    regeneratePDFPreview(for: pdfPreviewNote, presentation: presentation, textScale: pdfPreviewTextScale, textSpacing: pdfPreviewTextSpacing)
+                    regeneratePDFPreview(for: pdfPreviewNote, presentation: presentation, textScale: pdfPreviewTextScale, textSpacing: pdfPreviewTextSpacing, paperSize: pdfPreviewPaperSize)
                 },
                 onTextScaleChange: { scale in
-                    let normalizedScale = min(max(scale, 0.7), 1.4)
+                    let normalizedScale = min(max(scale, 0.4), 1.4)
                     pdfPreviewTextScale = normalizedScale
                     savedPDFTextScale = normalizedScale
 
@@ -896,6 +899,11 @@ struct NotesView: View {
                     let normalizedSpacing = min(max(spacing, 0.5), 2.0)
                     pdfPreviewTextSpacing = normalizedSpacing
                     savedPDFTextSpacing = normalizedSpacing
+                    schedulePDFPreviewRegeneration()
+                },
+                onPaperSizeChange: { size in
+                    pdfPreviewPaperSize = size
+                    savedPDFPaperSize = size.rawValue
                     schedulePDFPreviewRegeneration()
                 },
                 onSave: {
@@ -1022,12 +1030,14 @@ struct NotesView: View {
         for note: MarkdownNote,
         attachmentPresentation: NoteAttachmentPresentation,
         textScale: Double = 1,
-        textSpacing: Double = 1
+        textSpacing: Double = 1,
+        paperSize: NotePaperSize = .a4
     ) -> Data? {
         do {
             return try NoteExportService.pdfData(
                 for: note,
                 attachmentPresentation: attachmentPresentation,
+                paperSize: paperSize,
                 textScale: CGFloat(textScale),
                 textSpacing: CGFloat(textSpacing)
             )
@@ -1040,9 +1050,10 @@ struct NotesView: View {
     private func openPDFPreview(for note: MarkdownNote) {
         let presentation = attachmentPresentation
         pdfPreviewRegenerationTask?.cancel()
-        pdfPreviewTextScale = min(max(savedPDFTextScale, 0.7), 1.4)
+        pdfPreviewTextScale = min(max(savedPDFTextScale, 0.4), 1.4)
         pdfPreviewTextSpacing = min(max(savedPDFTextSpacing, 0.5), 2.0)
-        guard let data = makePDFData(for: note, attachmentPresentation: presentation, textScale: pdfPreviewTextScale, textSpacing: pdfPreviewTextSpacing),
+        pdfPreviewPaperSize = NotePaperSize(rawValue: savedPDFPaperSize) ?? .a4
+        guard let data = makePDFData(for: note, attachmentPresentation: presentation, textScale: pdfPreviewTextScale, textSpacing: pdfPreviewTextSpacing, paperSize: pdfPreviewPaperSize),
               let document = PDFDocument(data: data) else { return }
         pdfPreviewNote = note
         pdfPreviewDocument = document
@@ -1054,9 +1065,10 @@ struct NotesView: View {
         for note: MarkdownNote,
         presentation: NoteAttachmentPresentation,
         textScale: Double,
-        textSpacing: Double
+        textSpacing: Double,
+        paperSize: NotePaperSize
     ) {
-        guard let data = makePDFData(for: note, attachmentPresentation: presentation, textScale: textScale, textSpacing: textSpacing),
+        guard let data = makePDFData(for: note, attachmentPresentation: presentation, textScale: textScale, textSpacing: textSpacing, paperSize: paperSize),
               let document = PDFDocument(data: data) else { return }
         pdfPreviewAttachmentPresentationRaw = presentation.rawValue
         pdfPreviewDocument = document
@@ -1068,6 +1080,7 @@ struct NotesView: View {
         let presentation = NoteAttachmentPresentation(rawValue: pdfPreviewAttachmentPresentationRaw) ?? .expanded
         let textScale = pdfPreviewTextScale
         let textSpacing = pdfPreviewTextSpacing
+        let paperSize = pdfPreviewPaperSize
         pdfPreviewRegenerationTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled, let note else { return }
@@ -1075,7 +1088,8 @@ struct NotesView: View {
                 for: note,
                 presentation: presentation,
                 textScale: textScale,
-                textSpacing: textSpacing
+                textSpacing: textSpacing,
+                paperSize: paperSize
             )
         }
     }

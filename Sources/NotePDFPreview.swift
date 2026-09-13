@@ -8,9 +8,11 @@ struct NotePDFPreviewSheet: View {
     let attachmentPresentation: NoteAttachmentPresentation
     let textScale: Double
     let textSpacing: Double
+    let paperSize: NotePaperSize
     let onAttachmentPresentationChange: (NoteAttachmentPresentation) -> Void
     let onTextScaleChange: (Double) -> Void
     let onTextSpacingChange: (Double) -> Void
+    let onPaperSizeChange: (NotePaperSize) -> Void
     let onSave: () -> Void
     let onShare: () -> Void
     let onCancel: () -> Void
@@ -56,7 +58,7 @@ struct NotePDFPreviewSheet: View {
                             get: { textScale },
                             set: onTextScaleChange
                         ),
-                        in: 0.7...1.4,
+                        in: 0.4...1.4,
                         step: 0.05
                     )
                     .frame(width: 120)
@@ -82,6 +84,24 @@ struct NotePDFPreviewSheet: View {
                         .frame(width: 38, alignment: .trailing)
                 }
                 .help("Adjust spacing between paragraphs and lines")
+                Menu {
+                    ForEach(NotePaperSize.allCases, id: \.rawValue) { size in
+                        Button {
+                            onPaperSizeChange(size)
+                        } label: {
+                            HStack {
+                                Text(size.title)
+                                if size == paperSize {
+                                    Spacer()
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    Label("Paper: \(paperSize.title)", systemImage: "doc.plaintext")
+                }
+                .menuStyle(.borderlessButton)
                 Button("Cancel", action: onCancel)
                 Button("Save as PDF…", action: onSave)
                     .buttonStyle(.bordered)

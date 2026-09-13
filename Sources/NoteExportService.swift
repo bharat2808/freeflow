@@ -17,6 +17,36 @@ enum NoteAttachmentPresentation: String, CaseIterable {
     }
 }
 
+enum NotePaperSize: String, CaseIterable {
+    case a4
+    case letter
+    case legal
+
+    var title: String {
+        switch self {
+        case .a4: return "A4"
+        case .letter: return "US Letter"
+        case .legal: return "US Legal"
+        }
+    }
+
+    var cssName: String {
+        switch self {
+        case .a4: return "A4"
+        case .letter: return "Letter"
+        case .legal: return "Legal"
+        }
+    }
+
+    var pageSize: NSSize {
+        switch self {
+        case .a4: return NSSize(width: 595, height: 842)
+        case .letter: return NSSize(width: 612, height: 792)
+        case .legal: return NSSize(width: 612, height: 1008)
+        }
+    }
+}
+
 enum NoteExportError: LocalizedError {
     case couldNotCreatePDF
 
@@ -34,6 +64,7 @@ enum NoteExportService {
     static func pdfData(
         for note: MarkdownNote,
         attachmentPresentation: NoteAttachmentPresentation,
+        paperSize: NotePaperSize = .a4,
         textScale: CGFloat = 1,
         textSpacing: CGFloat = 1,
         store: MarkdownNoteStore = .standard
@@ -47,6 +78,7 @@ enum NoteExportService {
             attachmentPresentation: attachmentPresentation,
             store: store,
             assetDirectory: assetDirectory,
+            paperSize: paperSize,
             textScale: textScale,
             textSpacing: textSpacing
         )
@@ -69,7 +101,8 @@ enum NoteExportService {
         applyTextSpacing(to: renderedAttributed, factor: textSpacing)
         replaceAssetTokens(in: renderedAttributed, assetDirectory: assetDirectory)
 
-        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 612, height: 100_000))
+        let pageSize = paperSize.pageSize
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: pageSize.width, height: 100_000))
         textView.isEditable = false
         textView.isSelectable = false
         textView.drawsBackground = false
@@ -82,7 +115,6 @@ enum NoteExportService {
         )
         textView.frame.size.height = usedHeight
 
-        let pageSize = NSSize(width: 612, height: 792) // US Letter at 72 points per inch.
         let pageChromeHeight: CGFloat = 80
         let contentPageHeight = pageSize.height - pageChromeHeight
         let pageCount = max(1, Int(ceil(usedHeight / contentPageHeight)))
@@ -221,10 +253,12 @@ enum NoteExportService {
         attachmentPresentation: NoteAttachmentPresentation,
         store: MarkdownNoteStore,
         assetDirectory: URL,
+        paperSize: NotePaperSize,
         textScale: CGFloat,
         textSpacing: CGFloat
     ) -> String {
         let source = sourceWithoutTitle(note.markdown)
+        let contentWidth = paperSize.pageSize.width - 96
         let body = renderedBody(
             source,
             note: note,
@@ -237,7 +271,7 @@ enum NoteExportService {
         return """
         <!doctype html>
         <html><head><meta charset="utf-8"><style>
-        @page { size: Letter; margin: 48px; }
+        @page { size: \(paperSize.cssName); margin: 48px; }
         body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; color: #202124; font-size: \(12 * textScale)pt; }
         h1 { font-size: \(25 * textScale)pt; margin: 0 0 4px; }
         h2 { font-size: \(17 * textScale)pt; margin: 22px 0 7px; }
@@ -255,10 +289,10 @@ enum NoteExportService {
         table { border-collapse: collapse; font-size: 10pt; }
         th, td { border: 1px solid #b9b9b9; padding: 7px 10px; vertical-align: middle; }
         th { background: #e8e8e8; font-weight: 600; }
-        img { max-width: 100%; max-height: 680px; object-fit: contain; }
-        .pdf-page { display: block; width: auto; max-width: 516px; max-height: 680px; object-fit: contain; margin: 10px auto; page-break-inside: avoid; }
+        img { max-width: 100%; max-height: 730px; object-fit: contain; }
+        .pdf-page { display: block; width: auto; max-width: \(contentWidth)px; max-height: 730px; object-fit: contain; margin: 10px auto; page-break-inside: avoid; }
         .diagram { margin: 14px 0; page-break-inside: avoid; }
-        .diagram-image { display: block; width: 100%; max-width: 516px; height: auto; }
+        .diagram-image { display: block; width: 100%; max-width: \(contentWidth)px; height: auto; }
         pre { white-space: pre-wrap; font-family: Menlo, monospace; font-size: 9pt; background: #f3f3f3; padding: 10px; }
         </style></head><body>
         <h1>\(htmlEscape(note.title))</h1>
@@ -640,7 +674,7 @@ enum NoteExportService {
             let extensionName = attachment.url.pathExtension.isEmpty ? "png" : attachment.url.pathExtension
             let imageURL = assetDirectory.appendingPathComponent("image-\(UUID().uuidString).\(extensionName)")
             guard (try? data.write(to: imageURL, options: .atomic)) != nil else { return attachmentCard(attachment) }
-            return "<div class=\"attachment\"><div class=\"attachment-title\">\(htmlEscape(attachment.label))</div>\(assetToken(fileName: imageURL.lastPathComponent, size: NSSize(width: 516, height: 516)))</div>"
+            return "<div class=\"attachment\"><div class=\"attachment-title\">\(htmlEscape(attachment.label))</div>\(assetToken(fileName: imageURL.lastPathComponent, size: NSSize(width: 499, height: 499)))</div>"
         }
 
         if ["md", "markdown", "mdown", "mkd"].contains(attachment.url.pathExtension.lowercased()),
