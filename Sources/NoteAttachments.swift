@@ -10,25 +10,91 @@ import WebKit
 struct NoteMarkdownPreview: View {
     let markdown: String
     let note: MarkdownNote
+    let replaceTable: (MarkdownTableBlock, MarkdownTable, MarkdownTableLayout) -> Bool
     private let store = MarkdownNoteStore.standard
+    @State private var editingTable: MarkdownTableBlock?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            ForEach(Array(markdown.components(separatedBy: "\n\n").enumerated()), id: \.offset) { _, block in
-                if let attachment = attachment(in: block) {
-                    NoteAttachmentView(attachment: attachment)
-                } else if let webLink = webLink(in: block) {
-                    ExternalLinkView(label: webLink.label, url: webLink.url)
-                } else if !block.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Markdown(markdownWithLinkAffordances(block), baseURL: store.noteFolderURL(for: note))
-                        .environment(\.openURL, OpenURLAction { url in
-                            NSWorkspace.shared.open(url)
-                            return .handled
-                        })
+            ForEach(Array(previewSegments.enumerated()), id: \.offset) { _, segment in
+                switch segment {
+                case .markdown(let source):
+                    markdownBlocks(source)
+                case .table(let block):
+                    if editingTable?.range == block.range, editingTable?.source == block.source {
+                        MarkdownTableInlineEditor(
+                            block: block,
+                            note: note,
+                            onSave: { table, layout in replaceTable(block, table, layout) },
+                            onCancel: { editingTable = nil }
+                        )
+                        .id(block.id)
+                    } else {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Spacer()
+                                Button {
+                                    editingTable = block
+                                } label: {
+                                    Label("Edit table", systemImage: "tablecells")
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                            MarkdownTableRenderedView(block: block, note: note)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(12)
+                        .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 10))
+                    }
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private enum PreviewSegment {
+        case markdown(String)
+        case table(MarkdownTableBlock)
+    }
+
+    private var previewSegments: [PreviewSegment] {
+        let source = markdown as NSString
+        let tables = MarkdownTableParser.tables(in: markdown)
+        guard !tables.isEmpty else { return [.markdown(markdown)] }
+        var segments: [PreviewSegment] = []
+        var location = 0
+        for table in tables {
+            if table.range.location > location {
+                segments.append(.markdown(source.substring(with: NSRange(
+                    location: location,
+                    length: table.range.location - location
+                ))))
+            }
+            segments.append(.table(table))
+            location = NSMaxRange(table.range)
+        }
+        if location < source.length {
+            segments.append(.markdown(source.substring(from: location)))
+        }
+        return segments
+    }
+
+    @ViewBuilder
+    private func markdownBlocks(_ source: String) -> some View {
+        ForEach(Array(source.components(separatedBy: "\n\n").enumerated()), id: \.offset) { _, block in
+            if let attachment = attachment(in: block) {
+                NoteAttachmentView(attachment: attachment)
+            } else if let webLink = webLink(in: block) {
+                ExternalLinkView(label: webLink.label, url: webLink.url)
+            } else if !block.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Markdown(markdownWithLinkAffordances(block), baseURL: store.noteFolderURL(for: note))
+                    .environment(\.openURL, OpenURLAction { url in
+                        NSWorkspace.shared.open(url)
+                        return .handled
+                    })
+            }
+        }
     }
 
     private func attachment(in block: String) -> NoteAttachmentReference? {
@@ -205,6 +271,8 @@ private struct NativeVideoView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> FocusToggleVideoPlayerView {
         let view = FocusToggleVideoPlayerView()
+        view.wantsLayer = true
+        view.layer?.masksToBounds = true
         view.controlsStyle = .floating
         view.player = AVPlayer(url: url)
         view.isDocumentFocused = isFocused
@@ -214,6 +282,7 @@ private struct NativeVideoView: NSViewRepresentable {
 
     func updateNSView(_ nsView: FocusToggleVideoPlayerView, context: Context) {
         nsView.isDocumentFocused = isFocused
+        nsView.layer?.masksToBounds = true
         if nsView.player?.currentItem?.asset as? AVURLAsset == nil ||
             (nsView.player?.currentItem?.asset as? AVURLAsset)?.url != url {
             nsView.player?.pause()
@@ -280,6 +349,19 @@ private struct TextAttachmentView: View {
                         RoundedRectangle(cornerRadius: 8)
                             .stroke(Color.accentColor, lineWidth: 1)
                     }
+            } else if isMarkdown, let contents = try? String(contentsOf: url, encoding: .utf8) {
+                FocusToggleMarkdownScrollView(
+                    contents: contents,
+                    baseURL: url.deletingLastPathComponent(),
+                    isFocused: $isFocused
+                )
+                    .frame(maxWidth: .infinity, minHeight: 420, maxHeight: 800)
+                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(isFocused ? Color.accentColor : Color.clear, lineWidth: 1)
+                    }
             } else if let contents = try? String(contentsOf: url, encoding: .utf8) {
                 FocusToggleTextScrollView(contents: contents, isFocused: $isFocused)
                     .frame(maxWidth: .infinity, minHeight: 420, maxHeight: 800)
@@ -303,7 +385,7 @@ private struct TextAttachmentView: View {
 
     private var attachmentHeader: some View {
         HStack(spacing: 10) {
-            Label(label, systemImage: isHTML ? "globe" : "doc.text")
+            Label(label, systemImage: attachmentIcon)
                 .font(.headline)
                 .lineLimit(1)
             Spacer()
@@ -348,6 +430,16 @@ private struct TextAttachmentView: View {
         ["html", "htm"].contains(url.pathExtension.lowercased())
     }
 
+    private var isMarkdown: Bool {
+        ["md", "markdown", "mdown", "mkd"].contains(url.pathExtension.lowercased())
+    }
+
+    private var attachmentIcon: String {
+        if isHTML { return "globe" }
+        if isMarkdown { return "doc.richtext" }
+        return "doc.text"
+    }
+
     private var displayedContentIsFocused: Bool {
         isHTML && isPreviewingHTML ? isHTMLPreviewFocused : isFocused
     }
@@ -389,12 +481,36 @@ private struct TextAttachmentView: View {
     }
 }
 
+private struct FocusToggleMarkdownScrollView: View {
+    let contents: String
+    let baseURL: URL
+    @Binding var isFocused: Bool
+
+    var body: some View {
+        ScrollView {
+            Markdown(contents, baseURL: baseURL)
+                .environment(\.openURL, OpenURLAction { destination in
+                    NSWorkspace.shared.open(destination)
+                    return .handled
+                })
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(16)
+        }
+        .scrollDisabled(!isFocused)
+        .contentShape(Rectangle())
+        .simultaneousGesture(TapGesture().onEnded { isFocused.toggle() })
+    }
+}
+
 private struct FocusToggleTextScrollView: NSViewRepresentable {
     let contents: String
     @Binding var isFocused: Bool
 
     func makeNSView(context: Context) -> FocusGatedScrollView {
         let scrollView = FocusGatedScrollView()
+        scrollView.wantsLayer = true
+        scrollView.layer?.masksToBounds = true
         let textView = FocusToggleTextView()
 
         scrollView.drawsBackground = false
@@ -480,6 +596,8 @@ private struct HTMLWebView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> FocusToggleWebView {
         let webView = FocusToggleWebView(frame: .zero)
+        webView.wantsLayer = true
+        webView.layer?.masksToBounds = true
         webView.onToggleFocus = { isFocused.toggle() }
         webView.isDocumentFocused = isFocused
         webView.allowsMagnification = true
@@ -489,6 +607,7 @@ private struct HTMLWebView: NSViewRepresentable {
 
     func updateNSView(_ nsView: FocusToggleWebView, context: Context) {
         nsView.isDocumentFocused = isFocused
+        nsView.layer?.masksToBounds = true
         guard nsView.url?.standardizedFileURL != url.standardizedFileURL else { return }
         nsView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
     }
@@ -577,6 +696,8 @@ private struct PDFKitView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> FocusTogglePDFView {
         let view = FocusTogglePDFView()
+        view.wantsLayer = true
+        view.layer?.masksToBounds = true
         view.onToggleFocus = { isFocused.toggle() }
         view.isDocumentFocused = isFocused
         view.autoScales = true
@@ -587,6 +708,7 @@ private struct PDFKitView: NSViewRepresentable {
 
     func updateNSView(_ nsView: FocusTogglePDFView, context: Context) {
         nsView.isDocumentFocused = isFocused
+        nsView.layer?.masksToBounds = true
     }
 }
 

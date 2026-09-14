@@ -1,5 +1,37 @@
 import SwiftUI
 
+private final class NotesHostingView<Content: View>: NSHostingView<Content> {
+    private let contentMask = CAShapeLayer()
+
+    required init(rootView: Content) {
+        super.init(rootView: rootView)
+        wantsLayer = true
+        layer?.mask = contentMask
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateContentMask()
+    }
+
+    override func layout() {
+        super.layout()
+        updateContentMask()
+    }
+
+    private func updateContentMask() {
+        guard let window, let layer else { return }
+        let contentRect = convert(window.contentLayoutRect, from: nil).intersection(bounds)
+        contentMask.frame = layer.bounds
+        contentMask.path = CGPath(rect: contentRect, transform: nil)
+    }
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate {
     let appState = AppState()
     var setupWindow: NSWindow?
@@ -91,7 +123,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                                   backing: .buffered, defer: false)
             window.title = "FreeFlow Notes"
             window.titleVisibility = .hidden
-            window.contentView = NSHostingView(rootView: NotesView(library: appState.notesLibrary, searchState: notesSearchState).environmentObject(appState))
+            window.contentView = NotesHostingView(rootView: NotesView(library: appState.notesLibrary, searchState: notesSearchState).environmentObject(appState))
             let titlebarAccessory = NotesTitlebarAccessoryViewController(library: appState.notesLibrary, searchState: notesSearchState)
             titlebarAccessory.layoutAttribute = .right
             window.addTitlebarAccessoryViewController(titlebarAccessory)
