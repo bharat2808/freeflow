@@ -60,6 +60,8 @@ struct ProviderSettingsFields: View {
     @State private var isDownloadingLocalWhisperModel = false
     @State private var localWhisperDownloadProgress = 0.0
     @State private var localWhisperDownloadError: String?
+    @State private var isInstallingLocalWhisper = false
+    @State private var localWhisperInstallMessage: String?
     /// Updated by the cooldown timer so warning labels clear at expiry without user interaction.
     @State private var now: Date = Date()
     /// Tracks whether the Settings window is the frontmost active window.
@@ -129,6 +131,29 @@ struct ProviderSettingsFields: View {
                 await MainActor.run {
                     localWhisperDownloadError = "Could not download the Whisper model: \(error.localizedDescription)"
                     isDownloadingLocalWhisperModel = false
+                }
+            }
+        }
+    }
+
+    private func installLocalWhisper() {
+        guard !isInstallingLocalWhisper else { return }
+        isInstallingLocalWhisper = true
+        localWhisperDownloadError = nil
+        Task {
+            do {
+                let executableURL = try await LocalWhisperInstaller.installWhisperCpp { message in
+                    Task { @MainActor in localWhisperInstallMessage = message }
+                }
+                await MainActor.run {
+                    appState.localWhisperExecutablePath = executableURL.path
+                    localWhisperInstallMessage = "Installed at \(executableURL.path)"
+                    isInstallingLocalWhisper = false
+                }
+            } catch {
+                await MainActor.run {
+                    localWhisperDownloadError = error.localizedDescription
+                    isInstallingLocalWhisper = false
                 }
             }
         }
@@ -354,6 +379,15 @@ struct ProviderSettingsFields: View {
 
                     HStack(spacing: 10) {
                         Button {
+                            installLocalWhisper()
+                        } label: {
+                            Label(
+                                isInstallingLocalWhisper ? "Installing…" : (LocalWhisperInstaller.installedExecutableURL == nil ? "Install whisper.cpp" : "Installed"),
+                                systemImage: LocalWhisperInstaller.installedExecutableURL == nil ? "arrow.down.circle" : "checkmark.circle.fill"
+                            )
+                        }
+                        .disabled(isInstallingLocalWhisper || LocalWhisperInstaller.installedExecutableURL != nil)
+                        Button {
                             downloadBaseLocalWhisperModel()
                         } label: {
                             Label(
@@ -374,6 +408,14 @@ struct ProviderSettingsFields: View {
                             ProgressView(value: localWhisperDownloadProgress)
                                 .frame(width: 120)
                         }
+                        if isInstallingLocalWhisper {
+                            ProgressView()
+                        }
+                    }
+                    if let localWhisperInstallMessage {
+                        Text(localWhisperInstallMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     Text("Downloads the standard English model to ~/.cache/whisper (the download is about 142 MB).")
                         .font(.caption)
@@ -584,10 +626,110 @@ struct SettingsView: View {
                     RunLogView()
                 case .debug:
                     DebugSettingsView()
+                case .notesConnector:
+                    NotesConnectorSettingsView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+}
+
+struct NotesConnectorSettingsView: View {
+    @State private var selectedClient = "codex"
+    @State private var commandOutput: String?
+    @State private var copied = false
+
+    private var connectorURL: URL? {
+        Bundle.main.url(forResource: "freeflow-notes-mcp", withExtension: nil)
+    }
+
+    private var connectorPath: String {
+        connectorURL?.path ?? "Connector is not present in this app bundle"
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Notes Connector")
+                    .font(.title2.weight(.bold))
+                Text("Connect a local AI client to your FreeFlow notes.")
+                    .foregroundStyle(.secondary)
+
+                SettingsCard("Bundled connector", icon: "shippingbox") {
+                    Text(connectorPath)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                    HStack {
+                        Picker("Client", selection: $selectedClient) {
+                            Text("Codex").tag("codex")
+                            Text("Claude").tag("claude")
+                            Text("Generic MCP client").tag("generic")
+                        }
+                        Button(copied ? "Copied" : "Copy configuration") {
+                            copyConfiguration()
+                        }
+                        .disabled(connectorURL == nil)
+                    }
+                    if let commandOutput {
+                        Text(commandOutput)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
+                            .cornerRadius(6)
+                    }
+                }
+
+                SettingsCard("Run server", icon: "terminal") {
+                    Text("\"\(connectorPath)\" serve --stdio")
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                    Text("Add this command to a client that supports local MCP servers.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(24)
+        }
+    }
+
+    private func copyConfiguration() {
+        runConnector(arguments: ["config", "--client", selectedClient])
+        guard let commandOutput else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(commandOutput, forType: .string)
+        copied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+    }
+
+    private func runConnector(arguments: [String]) {
+        guard let connectorURL else {
+            commandOutput = "The connector executable is missing from this app bundle. Rebuild with `make ARCH=\(appArchitecture()) CODESIGN_IDENTITY=-`."
+            return
+        }
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = connectorURL
+        process.arguments = arguments
+        process.standardOutput = pipe
+        process.standardError = pipe
+        do {
+            try process.run()
+            process.waitUntilExit()
+            commandOutput = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "No output"
+        } catch {
+            commandOutput = error.localizedDescription
+        }
+    }
+
+    private func appArchitecture() -> String {
+        #if arch(arm64)
+        return "arm64"
+        #else
+        return "x86_64"
+        #endif
     }
 }
 

@@ -51,7 +51,10 @@ struct MarkdownNoteEditor: NSViewRepresentable {
     func updateNSView(_ nsView: AttachmentTextView, context: Context) {
         if nsView.string != text.wrappedValue {
             nsView.string = text.wrappedValue
-            nsView.setSelectedRange(clampedSelection(selectedRange.wrappedValue, for: nsView.string))
+        }
+        let targetSelection = clampedSelection(selectedRange.wrappedValue, for: nsView.string)
+        if nsView.selectedRange() != targetSelection {
+            nsView.setSelectedRange(targetSelection)
         }
     }
 

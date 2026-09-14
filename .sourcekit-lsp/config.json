@@ -1,0 +1,6 @@
+{
+  "defaultWorkspaceType": "compilationDatabase",
+  "compilationDatabase": {
+    "searchPaths": ["."]
+  }
+}

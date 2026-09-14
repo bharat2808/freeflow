@@ -12,6 +12,9 @@ struct FreeFlowTests {
         LLMCooldownManagerTests.run()
         TranscriptionErrorPresentationCoreTests.run()
         TranscriptTextCoreTests.run()
+        RecordingArtifactStoreTests.run()
+        VoiceMacroMatcherTests.run()
+        ClipboardControllerTests.run()
         print("FreeFlowTests passed")
     }
 }

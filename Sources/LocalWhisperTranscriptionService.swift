@@ -1,5 +1,11 @@
 import Foundation
 import os.lock
+import os.log
+
+private let localWhisperLog = OSLog(
+    subsystem: "com.zachlatta.freeflow",
+    category: "LocalWhisperPreview"
+)
 
 enum LocalWhisperModelDownloader {
     static let baseEnglishModelURL = URL(
@@ -48,6 +54,55 @@ enum LocalWhisperModelDownloader {
             let task = session.downloadTask(with: baseEnglishModelURL)
             task.resume()
         }
+    }
+}
+
+enum LocalWhisperInstaller {
+    static var brewURL: URL? {
+        ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
+            .map(URL.init(fileURLWithPath:))
+            .first { FileManager.default.isExecutableFile(atPath: $0.path) }
+    }
+
+    static var installedExecutableURL: URL? {
+        ["/opt/homebrew/bin/whisper-cli", "/usr/local/bin/whisper-cli"]
+            .map(URL.init(fileURLWithPath:))
+            .first { FileManager.default.isExecutableFile(atPath: $0.path) }
+    }
+
+    static func installWhisperCpp(
+        progress: @escaping @Sendable (String) -> Void = { _ in }
+    ) async throws -> URL {
+        if let installedExecutableURL { return installedExecutableURL }
+        guard let brewURL else {
+            throw LocalWhisperError.installerNotFound
+        }
+
+        progress("Installing whisper-cpp with Homebrew…")
+        let process = Process()
+        process.executableURL = brewURL
+        process.arguments = ["install", "whisper-cpp"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try process.run()
+
+        let reader = pipe.fileHandleForReading
+        while process.isRunning {
+            if let data = try? reader.read(upToCount: 4096), let output = String(data: data, encoding: .utf8), !output.isEmpty {
+                progress(output.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+            try? await Task.sleep(for: .milliseconds(150))
+        }
+        let remaining = try? reader.readToEnd()
+        if let remaining, let output = String(data: remaining, encoding: .utf8), !output.isEmpty {
+            progress(output.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        guard process.terminationStatus == 0, let executableURL = installedExecutableURL else {
+            throw LocalWhisperError.installFailed
+        }
+        progress("whisper-cpp installed")
+        return executableURL
     }
 }
 
@@ -121,6 +176,8 @@ enum LocalWhisperError: LocalizedError {
     case processFailed(Int32, String)
     case timedOut(TimeInterval)
     case emptyTranscript
+    case installerNotFound
+    case installFailed
 
     var errorDescription: String? {
         switch self {
@@ -137,6 +194,10 @@ enum LocalWhisperError: LocalizedError {
             return "Local Whisper timed out after \(Int(seconds)) seconds. Try a smaller model or shorter recording."
         case .emptyTranscript:
             return "Local Whisper returned no transcript."
+        case .installerNotFound:
+            return "Homebrew was not found. Install Homebrew first, or set a custom whisper-cli path in Settings."
+        case .installFailed:
+            return "Homebrew could not install whisper-cpp. Install it manually, then choose whisper-cli in Settings."
         }
     }
 }
@@ -369,7 +430,6 @@ final class LocalWhisperTranscriptionService: AudioTranscriber {
             try Task.checkCancellation()
             try await Task.sleep(nanoseconds: 100_000_000)
         }
-        process.waitUntilExit()
 
         let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         guard process.terminationStatus == 0 else {
@@ -451,11 +511,15 @@ private extension Data {
 /// is transcribed again after stop, so preview latency never changes the
 /// authoritative note contents.
 final class LocalWhisperPreviewSession: @unchecked Sendable {
+    private struct PreviewSnapshot {
+        let audio: Data
+    }
+
     private let transcribe: @Sendable (Data, Int) async throws -> String
     private let onUpdate: @Sendable (String) -> Void
     private let stateLock = OSAllocatedUnfairLock(initialState: ())
     private var audio = Data()
-    private var committedTranscript = ""
+    private var pendingPreviewBytes = 0
     private var stopped = false
     private var workerRunning = false
     private var workerTask: Task<Void, Never>?
@@ -477,13 +541,9 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
         let shouldStartWorker = stateLock.withLock { () -> Bool in
             guard !stopped else { return false }
             audio.append(samples)
-            let bytesPerFrame = MemoryLayout<Int16>.size
-            let maxBytes = maxBufferedFrames * bytesPerFrame
-            if audio.count > maxBytes {
-                audio.removeFirst(audio.count - maxBytes)
-            }
-            let chunkBytes = chunkFrames * bytesPerFrame
-            guard !workerRunning, audio.count >= chunkBytes else { return false }
+            pendingPreviewBytes += samples.count
+            let chunkBytes = chunkFrames * MemoryLayout<Int16>.size
+            guard !workerRunning, pendingPreviewBytes >= chunkBytes else { return false }
             workerRunning = true
             return true
         }
@@ -507,22 +567,28 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
         }
     }
 
-    private func nextChunkLocked() -> Data? {
-        let chunkBytes = chunkFrames * MemoryLayout<Int16>.size
-        guard audio.count >= chunkBytes else { return nil }
-        let chunk = Data(audio.prefix(chunkBytes))
-        audio.removeFirst(chunkBytes)
-        return chunk
+    private func nextPreviewSnapshotLocked() -> PreviewSnapshot? {
+        let bytesPerFrame = MemoryLayout<Int16>.size
+        let chunkBytes = chunkFrames * bytesPerFrame
+        guard pendingPreviewBytes >= chunkBytes, audio.count >= chunkBytes else { return nil }
+        pendingPreviewBytes = 0
+        let maxBytes = maxBufferedFrames * bytesPerFrame
+        if audio.count > maxBytes {
+            // Trim once per inference instead of shifting a 20-second Data
+            // buffer on every microphone callback after the window fills.
+            audio = Data(audio.suffix(maxBytes))
+        }
+        return PreviewSnapshot(audio: audio)
     }
 
     private func drainAudio() async {
         while !Task.isCancelled {
-            let snapshot: Data? = stateLock.withLock {
+            let snapshot: PreviewSnapshot? = stateLock.withLock {
                 guard !stopped else {
                     workerRunning = false
                     return nil
                 }
-                return nextChunkLocked()
+                return nextPreviewSnapshotLocked()
             }
 
             guard let snapshot else {
@@ -541,24 +607,28 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
         }
     }
 
-    private func process(_ snapshot: Data) async {
+    private func process(_ snapshot: PreviewSnapshot) async {
+        let startedAt = CFAbsoluteTimeGetCurrent()
         do {
             // Avoid invoking Whisper for clearly silent chunks.  This keeps
             // long recordings inexpensive while preserving the recorder's
             // complete audio for final transcription.
-            if containsSpeech(snapshot) {
-                let transcript = try await transcribe(snapshot, sampleRate)
+            if containsSpeech(snapshot.audio) {
+                let transcript = try await transcribe(snapshot.audio, sampleRate)
                 try Task.checkCancellation()
-                if !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    let committed: String = stateLock.withLock {
-                        if committedTranscript.isEmpty {
-                            committedTranscript = transcript
-                        } else {
-                            committedTranscript += " " + transcript
-                        }
-                        return committedTranscript
-                    }
-                    onUpdate(committed)
+                let preview = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !preview.isEmpty {
+                    // Each snapshot is a rolling window and may revise words
+                    // from the prior result. Replacing the provisional preview
+                    // avoids duplicating those revised overlapping passages.
+                    onUpdate(preview)
+                    os_log(
+                        .info,
+                        log: localWhisperLog,
+                        "preview updated audio=%.1fs elapsed=%.0fms",
+                        Double(snapshot.audio.count) / Double(sampleRate * MemoryLayout<Int16>.size),
+                        (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+                    )
                 }
             }
         } catch is CancellationError {
@@ -566,6 +636,13 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
         } catch {
             // Preview failures are non-fatal; the final stop-time transcription
             // still reports actionable errors to the user.
+            os_log(
+                .error,
+                log: localWhisperLog,
+                "preview failed after %.0fms: %{public}@",
+                (CFAbsoluteTimeGetCurrent() - startedAt) * 1000,
+                error.localizedDescription
+            )
         }
     }
 

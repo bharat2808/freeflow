@@ -19,12 +19,15 @@ TEST_PRODUCTION_SOURCES = \
 	Sources/TranscriptionService.swift \
 	Sources/AppContextService.swift \
 	Sources/AppName.swift \
+	Sources/ClipboardController.swift \
 	Sources/LLMAPITransport.swift \
 	Sources/LLMCooldownManager.swift \
 	Sources/ModelConfiguration.swift \
+	Sources/RecordingArtifactStore.swift \
 	Sources/TranscriptionErrorPresentationCore.swift \
 	Sources/TranscriptTextCore.swift \
 	Sources/UpdateManager.swift \
+	Sources/VoiceMacroMatcher.swift \
 	Sources/ShortcutCore/DictationShortcutSessionController.swift \
 	Sources/ShortcutCore/ShortcutMatcher.swift \
 	Sources/ShortcutCore/ShortcutModels.swift
@@ -32,6 +35,9 @@ TEST_SOURCES = $(shell find Tests -name '*.swift' -type f | LC_ALL=C sort)
 SHELL_SCRIPTS = $(shell find .github/scripts .agents/skills -name '*.sh' -type f | LC_ALL=C sort)
 YAML_FILES = $(shell find .github -type f \( -name '*.yml' -o -name '*.yaml' \) | LC_ALL=C sort)
 RESOURCES = $(CONTENTS)/Resources
+CONNECTOR_RESOURCES_BINARY = $(RESOURCES)/freeflow-notes-mcp
+CONNECTOR_RESOURCES_BINARY_TARGET := $(subst $(space),\ ,$(CONNECTOR_RESOURCES_BINARY))
+CONNECTOR_PACKAGE_SOURCES = $(shell find ConnectorPackage -path '*/.build' -prune -o -type f -print | LC_ALL=C sort)
 ARCH ?= $(shell uname -m)
 MARKDOWNUI_BUILD_DIR = .build/$(ARCH)-apple-macosx/debug
 MARKDOWNUI_ARCHIVE = $(BUILD_DIR)/libMarkdownUI-$(ARCH).a
@@ -52,11 +58,11 @@ ICON_SOURCE = Resources/AppIcon-Source.png
 ICON_ICNS = Resources/AppIcon.icns
 endif
 
-.PHONY: all check clean run icon dmg codesign-dmg notarize test typecheck validate markdownui
+.PHONY: all check clean run icon dmg codesign-dmg notarize test typecheck validate markdownui ide-index connector-build connector-test
 
 all: $(APP_EXECUTABLE_TARGET)
 
-$(APP_EXECUTABLE_TARGET): $(SOURCES) $(WHISPER_BRIDGE_OBJECT) $(MARKDOWNUI_REQUIRED_ARCHIVES) Info.plist $(ICON_ICNS)
+$(APP_EXECUTABLE_TARGET): $(SOURCES) $(WHISPER_BRIDGE_OBJECT) $(MARKDOWNUI_REQUIRED_ARCHIVES) Info.plist $(ICON_ICNS) $(CONNECTOR_RESOURCES_BINARY_TARGET)
 	@mkdir -p "$(MACOS_DIR)" "$(RESOURCES)"
 ifeq ($(ARCH),universal)
 		swiftc \
@@ -92,11 +98,26 @@ endif
 	@plutil -replace CFBundleExecutable -string "$(APP_NAME)" "$(CONTENTS)/Info.plist"
 	@plutil -replace CFBundleIdentifier -string "$(BUNDLE_ID)" "$(CONTENTS)/Info.plist"
 	@cp $(ICON_ICNS) "$(RESOURCES)/AppIcon.icns"
+	@codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$(CONNECTOR_RESOURCES_BINARY)"
 	@plutil -replace NSMicrophoneUsageDescription -string "$(APP_NAME) needs microphone access to transcribe your speech." "$(CONTENTS)/Info.plist"
 	@plutil -replace NSSpeechRecognitionUsageDescription -string "$(APP_NAME) needs speech recognition to convert your voice to text." "$(CONTENTS)/Info.plist"
 	@plutil -replace NSAccessibilityUsageDescription -string "$(APP_NAME) needs accessibility access to detect the text cursor position and paste transcribed text." "$(CONTENTS)/Info.plist"
 	@codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" --entitlements FreeFlow.entitlements "$(APP_BUNDLE)"
 	@echo "Built $(APP_BUNDLE)"
+
+$(CONNECTOR_RESOURCES_BINARY_TARGET): $(CONNECTOR_PACKAGE_SOURCES)
+	@mkdir -p "$(RESOURCES)"
+ifeq ($(ARCH),universal)
+	@swift build --package-path ConnectorPackage -c release --arch arm64
+	@swift build --package-path ConnectorPackage -c release --arch x86_64
+	@lipo -create -output "$@" \
+		"ConnectorPackage/.build/arm64-apple-macosx/release/freeflow-notes-mcp" \
+		"ConnectorPackage/.build/x86_64-apple-macosx/release/freeflow-notes-mcp"
+else
+	@swift build --package-path ConnectorPackage -c release --arch "$(ARCH)"
+	@cp "ConnectorPackage/.build/$(ARCH)-apple-macosx/release/freeflow-notes-mcp" "$@"
+endif
+	@chmod 755 "$@"
 
 check: typecheck test validate
 
@@ -112,6 +133,14 @@ typecheck:
 		$(SOURCES)
 
 markdownui: $(MARKDOWNUI_REQUIRED_ARCHIVES)
+
+connector-build:
+	 swift build --package-path ConnectorPackage -c release
+	 @mkdir -p "$(BUILD_DIR)"
+	 @cp ConnectorPackage/.build/arm64-apple-macosx/release/freeflow-notes-mcp "$(BUILD_DIR)/freeflow-notes-mcp"
+
+connector-test:
+	 swift test --package-path ConnectorPackage
 
 $(BUILD_DIR)/libMarkdownUI-%.a: Package.swift Sources/PackageSupport/PackageSupport.swift
 	@mkdir -p "$(BUILD_DIR)"
@@ -149,8 +178,13 @@ endif
 
 validate:
 	plutil -lint Info.plist FreeFlow.entitlements
+	swiftc -typecheck Scripts/generate-compilation-database.swift
+	@ruby -rjson -e 'ARGV.each { |file| JSON.parse(File.read(file)) }' .sourcekit-lsp/config.json
 	@set -e; for script in $(SHELL_SCRIPTS); do bash -n "$$script"; done
 	@ruby -e 'require "yaml"; ARGV.each { |file| YAML.load_file(file) }' $(YAML_FILES)
+
+ide-index:
+	swift Scripts/generate-compilation-database.swift
 
 icon: $(ICON_ICNS)
 
