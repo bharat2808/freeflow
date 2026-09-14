@@ -148,6 +148,13 @@ enum NoteVoiceAction: Sendable, Equatable {
     case append
 }
 
+struct PendingNoteUpdate: Identifiable {
+    let id = UUID()
+    let noteID: UUID
+    let action: NoteVoiceAction
+    let markdown: String
+}
+
 private enum CommandInvocation: String {
     case automatic
     case manual
@@ -637,6 +644,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     @Published var liveNoteTranscript: String = ""
     @Published var noteUpdateTargetID: UUID?
     @Published var noteVoiceAction: NoteVoiceAction?
+    @Published var pendingNoteUpdate: PendingNoteUpdate?
     @Published var hasScreenRecordingPermission = false
     @Published var launchAtLogin: Bool {
         didSet { setLaunchAtLogin(launchAtLogin) }
@@ -673,6 +681,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private var pendingManualCommandInvocation = false
     private var pendingNoteRecording = false
     private var activeNoteRecording = false
+    private var activeNewNoteID: UUID?
+    private var activeNoteUpdateTargetID: UUID?
+    private var activeNoteUpdateAction: NoteVoiceAction?
     private var pendingShortcutStartTask: Task<Void, Never>?
     private var pendingShortcutStartMode: RecordingTriggerMode?
     private var realtimeService: RealtimeTranscriptionService?
@@ -1878,6 +1889,10 @@ final class AppState: ObservableObject, @unchecked Sendable {
     /// menu-bar dictation continues to paste into the focused text field.
     func startNoteRecording() {
         guard !isRecording, !isTranscribing else { return }
+        guard let noteID = notesLibrary.createEmpty() else { return }
+        activeNewNoteID = noteID
+        activeNoteUpdateTargetID = nil
+        activeNoteUpdateAction = nil
         pendingNoteRecording = true
         toggleRecording()
     }
@@ -1898,6 +1913,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
               notesLibrary.notes.contains(where: { $0.id == noteID }) else { return }
         noteUpdateTargetID = noteID
         noteVoiceAction = .update
+        activeNoteUpdateTargetID = noteID
+        activeNoteUpdateAction = .update
         liveNoteTranscript = ""
         pendingNoteRecording = true
         toggleRecording()
@@ -1908,9 +1925,34 @@ final class AppState: ObservableObject, @unchecked Sendable {
               notesLibrary.notes.contains(where: { $0.id == noteID }) else { return }
         noteUpdateTargetID = noteID
         noteVoiceAction = .append
+        activeNoteUpdateTargetID = noteID
+        activeNoteUpdateAction = .append
         liveNoteTranscript = ""
         pendingNoteRecording = true
         toggleRecording()
+    }
+
+    func confirmPendingNoteUpdate() {
+        guard let pendingNoteUpdate else { return }
+        let saved = notesLibrary.update(id: pendingNoteUpdate.noteID, markdown: pendingNoteUpdate.markdown)
+        statusText = saved ? "Note updated" : "Note could not be updated"
+        self.pendingNoteUpdate = nil
+        noteUpdateTargetID = nil
+        noteVoiceAction = nil
+        activeNoteUpdateTargetID = nil
+        activeNoteUpdateAction = nil
+        if saved {
+            NotificationCenter.default.post(name: .showNotes, object: nil)
+        }
+    }
+
+    func cancelPendingNoteUpdate() {
+        pendingNoteUpdate = nil
+        noteUpdateTargetID = nil
+        noteVoiceAction = nil
+        activeNoteUpdateTargetID = nil
+        activeNoteUpdateAction = nil
+        statusText = "Update cancelled"
     }
 
     private func handleOverlayStopButtonPressed() {
@@ -2996,6 +3038,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
         let trimmedCustomPrompt = noteSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let basePrompt = trimmedCustomPrompt.isEmpty ? MarkdownNoteStore.systemPrompt : trimmedCustomPrompt
+        let protectedExisting = MarkdownNoteStore.protectMarkdownReferences(existingNote.markdown)
         let updatePrompt: String
         let updateInput: String
         switch action {
@@ -3004,7 +3047,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
             updateInput = """
             EXISTING_MARKDOWN_NOTE:
             <note>
-            \(existingNote.markdown)
+            \(protectedExisting.markdown)
             </note>
 
             SPOKEN_UPDATE_INSTRUCTION:
@@ -3014,15 +3057,21 @@ final class AppState: ObservableObject, @unchecked Sendable {
             """
         case .append:
             updatePrompt = basePrompt + "\n\n" + """
-            Append the spoken transcription to the end of the existing Markdown note.
-            Return only the complete updated Markdown note. Preserve all existing content exactly
-            unless required to add the new material. Format only the new material as Markdown and
-            do not summarize, omit, or invent content.
-            """
+Append the spoken transcription to the end of the existing Markdown note.
+Return only the complete updated Markdown note. Preserve all existing content exactly
+unless required to add the new material. Format only the new material as Markdown and
+do not summarize, omit, or invent content. Preserve every existing attachment reference
+exactly, including its Markdown syntax, label, relative path, folder name, filename, and
+extension. Never convert attachment references to absolute paths, plain text, or shortened
+filenames. Keep each attachment on its own line with a blank line before and after it.
+Separate newly appended attachments and text from the existing note with blank lines.
+Existing references are represented by ATTACHMENT_N placeholders. Preserve each placeholder
+exactly unless the spoken instruction explicitly asks to remove or convert that item.
+"""
             updateInput = """
             EXISTING_MARKDOWN_NOTE:
             <note>
-            \(existingNote.markdown)
+            \(protectedExisting.markdown)
             </note>
 
             SPOKEN_TRANSCRIPTION_TO_APPEND:
@@ -3040,7 +3089,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 customSystemPrompt: updatePrompt,
                 outputLanguage: outputLanguage
             )
-            return (result.transcript, .postProcessingSucceeded, result.prompt)
+            let restoredMarkdown = protectedExisting.restore(in: result.transcript)
+            return (restoredMarkdown, .postProcessingSucceeded, result.prompt)
         } catch {
             os_log(.error, log: recordingLog, "Note update failed: %{public}@", error.localizedDescription)
             return (existingNote.markdown, .postProcessingFailedFallback, "")
@@ -3082,8 +3132,10 @@ final class AppState: ObservableObject, @unchecked Sendable {
             sessionContext = capturedContext
         }
         let inFlightContextTask = contextCaptureTask
-        let noteUpdateTargetID = self.noteUpdateTargetID
-        let noteVoiceAction = self.noteVoiceAction ?? .update
+        let noteUpdateTargetID = activeNoteUpdateTargetID ?? self.noteUpdateTargetID
+        let noteVoiceAction = activeNoteUpdateAction ?? self.noteVoiceAction ?? .update
+        let isNoteUpdate = noteUpdateTargetID != nil
+        let newNoteTargetID = shouldSaveAsNote ? activeNewNoteID : nil
         let noteUpdateTarget = noteUpdateTargetID.flatMap { id in
             notesLibrary.notes.first(where: { $0.id == id })
         }
@@ -3149,6 +3201,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
             let activeLocalPreview = self.localPreviewService
             self.localPreviewService = nil
             self.audioRecorder.onPCM16Samples = nil
+            self.audioRecorder.onRecordingPCM16Samples = nil
             self.transcriptionTask?.cancel()
             guard self.isTranscribing else {
                 if let savedAudioFile {
@@ -3336,12 +3389,24 @@ final class AppState: ObservableObject, @unchecked Sendable {
                                !self.showPostTranscriptionUpdateReminderIfNeeded() {
                                 self.overlayManager.dismiss()
                             }
-                        } else if let noteUpdateTarget {
-                            let updateFailed = result.outcome.usedRawTranscriptFallback
-                            let saved = !updateFailed && self.notesLibrary.update(id: noteUpdateTarget.id, markdown: trimmedFinalTranscript)
-                            self.statusText = saved ? "Note updated" : "Note could not be updated"
+                        } else if isNoteUpdate {
+                            if let noteUpdateTarget {
+                                self.pendingNoteUpdate = PendingNoteUpdate(
+                                    noteID: noteUpdateTarget.id,
+                                    action: noteVoiceAction,
+                                    markdown: trimmedFinalTranscript
+                                )
+                                self.statusText = "Preview ready"
+                            } else {
+                                self.statusText = "Note update could not find the original note"
+                                self.errorMessage = "The note changed or was removed before the update completed. No new note was created."
+                            }
                             self.noteUpdateTargetID = nil
                             self.noteVoiceAction = nil
+                        } else if let newNoteTargetID {
+                            let saved = self.notesLibrary.update(id: newNoteTargetID, markdown: trimmedFinalTranscript)
+                            self.statusText = saved ? "Note saved" : "Note could not be saved"
+                            self.activeNewNoteID = nil
                             NotificationCenter.default.post(name: .showNotes, object: nil)
                         } else if shouldSaveAsNote {
                             let saved = self.notesLibrary.create(trimmedFinalTranscript)
@@ -3367,7 +3432,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                         self.audioRecorder.cleanup()
                         self.refreshAvailableMicrophonesIfNeeded()
 
-                        self.scheduleReadyStatusReset(after: 3, matching: [completionStatusText, "Nothing to transcribe", saveFailureStatusText, "Note updated", "Note could not be updated"])
+                        self.scheduleReadyStatusReset(after: 3, matching: [completionStatusText, "Nothing to transcribe", saveFailureStatusText, "Note updated", "Note could not be updated", "Preview ready"])
                     }
                 } catch is CancellationError {
                     await MainActor.run {
@@ -3493,7 +3558,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     }
                 }
                 localPreviewService = preview
-                audioRecorder.onPCM16Samples = { [weak preview] data in
+                audioRecorder.onRecordingPCM16Samples = { [weak preview] data in
                     preview?.appendPCM16(data)
                 }
             } catch {
@@ -3534,6 +3599,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
     private func tearDownRealtimeService() {
         audioRecorder.onPCM16Samples = nil
+        audioRecorder.onRecordingPCM16Samples = nil
         realtimeService?.cancel()
         realtimeService = nil
         localPreviewService?.stop()

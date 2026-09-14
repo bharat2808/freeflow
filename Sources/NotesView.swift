@@ -1,4 +1,5 @@
 import AppKit
+import MarkdownUI
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -10,6 +11,8 @@ final class NotesLibrary: ObservableObject {
     private let store = MarkdownNoteStore.standard
     private let saveQueue = DispatchQueue(label: "freeflow.notes.save", qos: .utility)
     private var pendingSaveWorkItems: [UUID: DispatchWorkItem] = [:]
+    private var editUndoBaselines: [UUID: MarkdownNote] = [:]
+    private var undoStack: [UUID: [MarkdownNote]] = [:]
 
     init() { reload() }
 
@@ -51,8 +54,26 @@ final class NotesLibrary: ObservableObject {
         }
     }
 
+    @discardableResult
+    func createEmpty() -> UUID? {
+        let note = MarkdownNote(id: UUID(), markdown: "# Untitled note\n\n", modified: Date())
+        do {
+            try store.save(note)
+            notes.insert(note, at: 0)
+            selectedID = note.id
+            error = nil
+            return note.id
+        } catch {
+            self.error = "Could not create note: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
     func edit(id: UUID, markdown: String) {
         guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
+        if editUndoBaselines[id] == nil {
+            editUndoBaselines[id] = notes[index]
+        }
         notes[index].markdown = markdown
         notes[index].modified = Date()
         let note = notes[index]
@@ -65,6 +86,7 @@ final class NotesLibrary: ObservableObject {
                 DispatchQueue.main.async {
                     guard let self, self.pendingSaveWorkItems[id] === workItem else { return }
                     self.pendingSaveWorkItems[id] = nil
+                    self.commitPendingEditHistory(for: id)
                     self.error = nil
                 }
             } catch {
@@ -80,8 +102,30 @@ final class NotesLibrary: ObservableObject {
     }
 
     @discardableResult
+    func importAttachment(_ payload: NoteAttachmentPayload, for noteID: UUID) -> String? {
+        guard let index = notes.firstIndex(where: { $0.id == noteID }) else { return nil }
+        let note = notes[index]
+        do {
+            let path: String
+            if let sourceURL = payload.sourceURL {
+                path = try store.importAttachment(from: sourceURL, for: note)
+            } else if let imageData = payload.imageData {
+                path = try store.writeAttachment(imageData, fileName: payload.fileName, for: note)
+            } else {
+                return nil
+            }
+            return path
+        } catch let attachmentError {
+            self.error = "Could not add attachment: \(attachmentError.localizedDescription)"
+            return nil
+        }
+    }
+
+    @discardableResult
     func update(id: UUID, markdown: String) -> Bool {
         guard let index = notes.firstIndex(where: { $0.id == id }) else { return false }
+        commitPendingEditHistory(for: id)
+        undoStack[id, default: []].append(notes[index])
         let updated = MarkdownNote(
             id: id,
             markdown: markdown,
@@ -98,6 +142,38 @@ final class NotesLibrary: ObservableObject {
             self.error = "Could not update note: \(error.localizedDescription)"
             return false
         }
+    }
+
+    var canUndoSelectedNote: Bool {
+        guard let selectedID else { return false }
+        return editUndoBaselines[selectedID] != nil || !(undoStack[selectedID]?.isEmpty ?? true)
+    }
+
+    @discardableResult
+    func undoSelectedNote() -> Bool {
+        guard let selectedID,
+              let index = notes.firstIndex(where: { $0.id == selectedID }) else { return false }
+        pendingSaveWorkItems[selectedID]?.cancel()
+        pendingSaveWorkItems[selectedID] = nil
+        commitPendingEditHistory(for: selectedID)
+        guard let previous = undoStack[selectedID]?.popLast() else { return false }
+        do {
+            try store.save(previous)
+            notes[index] = previous
+            error = nil
+            return true
+        } catch let undoError {
+            undoStack[selectedID, default: []].append(previous)
+            error = "Could not undo note: \(undoError.localizedDescription)"
+            return false
+        }
+    }
+
+    private func commitPendingEditHistory(for id: UUID) {
+        guard let baseline = editUndoBaselines.removeValue(forKey: id),
+              let current = notes.first(where: { $0.id == id }),
+              baseline != current else { return }
+        undoStack[id, default: []].append(baseline)
     }
 
     var folders: [String] {
@@ -163,6 +239,33 @@ final class NotesLibrary: ObservableObject {
         }
     }
 
+    func deleteFolder(_ folder: String) {
+        let value = folder.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        let affectedNotes = notes.filter {
+            $0.folder == value || $0.folder.hasPrefix(value + "/")
+        }
+        do {
+            for note in affectedNotes {
+                try flushPendingSave(for: note)
+            }
+            for note in affectedNotes {
+                guard let index = notes.firstIndex(where: { $0.id == note.id }) else { continue }
+                notes[index] = try store.move(note, toFolder: "")
+            }
+            try store.deleteFolder(value)
+            notes.sort { $0.modified > $1.modified }
+            savedFolders = store.loadFolders()
+            if let selectedID, affectedNotes.contains(where: { $0.id == selectedID }) {
+                self.selectedID = selectedID
+            }
+            error = nil
+        } catch {
+            self.error = "Could not delete folder: \(error.localizedDescription)"
+            reload()
+        }
+    }
+
     private func flushPendingSave(for note: MarkdownNote) throws {
         pendingSaveWorkItems[note.id]?.cancel()
         pendingSaveWorkItems[note.id] = nil
@@ -174,11 +277,35 @@ final class NotesLibrary: ObservableObject {
     func revealFiles() { NSWorkspace.shared.open(store.directory) }
 }
 
+private struct NotesHeaderIconControl: View {
+    let systemName: String
+    var tint: Color?
+    var iconFrameSize: CGFloat = 20
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.system(size: iconFrameSize, weight: .semibold))
+            .foregroundStyle(
+                isEnabled
+                    ? (tint ?? Color(nsColor: .labelColor))
+                    : Color(nsColor: .disabledControlTextColor)
+            )
+            .frame(width: 40, height: 32)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(nsColor: .underPageBackgroundColor).opacity(0.7))
+                    .opacity(isEnabled ? 0 : 1)
+            )
+    }
+}
+
 struct NotesView: View {
     @EnvironmentObject var appState: AppState
     @ObservedObject var library: NotesLibrary
     @ObservedObject var searchState: NotesSearchState
     @State private var preview = false
+    @State private var editorSelection = NSRange(location: 0, length: 0)
     @State private var showMoveSheet = false
     @State private var destinationFolder = ""
     @State private var showCreateFolderSheet = false
@@ -187,6 +314,8 @@ struct NotesView: View {
     @State private var renameFolderName = ""
     @State private var selectedFolderForRename: String?
     @State private var showDeleteConfirmation = false
+    @State private var showDeleteFolderConfirmation = false
+    @State private var selectedFolderForDelete: String?
     @State private var expandedFolders: Set<String> = []
     @State private var collapsedFolders: Set<String> = []
 
@@ -253,116 +382,128 @@ struct NotesView: View {
         return appState.lastRawTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    var body: some View {
-        NavigationSplitView {
-            List(selection: $library.selectedID) {
-                Section {
-                    ForEach(sidebarFolders, id: \.self) { folder in
-                        folderRows(folder)
+    @ViewBuilder
+    private var noteRecordingStatus: some View {
+        if appState.isRecording || appState.isTranscribing {
+            VStack(alignment: .leading, spacing: 8) {
+                Label(
+                    appState.noteUpdateTargetID == nil
+                        ? "Taking note"
+                        : (appState.noteVoiceAction == .append ? "Appending to note" : "Updating note"),
+                    systemImage: appState.isRecording ? "waveform" : "ellipsis.circle"
+                )
+                .font(.headline)
+                .foregroundStyle(.tint)
+                ScrollView {
+                    Text(liveTranscript.isEmpty ? "Listening…" : liveTranscript)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(maxHeight: 150)
+            }
+            .padding(14)
+            .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, 18)
+            .padding(.top, 12)
+        }
+    }
+
+    private var notesSidebar: some View {
+        List(selection: $library.selectedID) {
+            Section {
+                ForEach(sidebarFolders, id: \.self) { folder in
+                    folderRows(folder)
+                }
+            } header: {
+                HStack {
+                    Text("Notes")
+                    Spacer()
+                    Button { library.createEmpty() } label: {
+                        Image(systemName: "note.text.badge.plus")
+                            .font(.title3)
+                            .frame(width: 34, height: 34)
                     }
-                } header: {
-                    HStack {
-                        Text("Notes")
-                        Spacer()
-                        Button { library.create("# Untitled note\n\n") } label: {
-                            Image(systemName: "note.text.badge.plus")
-                                .font(.title3)
-                                .frame(width: 34, height: 34)
-                        }
-                        .buttonStyle(.borderless)
-                        .help("New note")
-                        Button {
-                            newFolderName = ""
-                            showCreateFolderSheet = true
-                        } label: {
-                            Image(systemName: "folder.badge.plus")
-                                .font(.title3)
-                                .frame(width: 34, height: 34)
-                        }
-                        .buttonStyle(.borderless)
-                        .help("New folder")
+                    .buttonStyle(.borderless)
+                    .help("New note")
+                    Button {
+                        newFolderName = ""
+                        showCreateFolderSheet = true
+                    } label: {
+                        Image(systemName: "folder.badge.plus")
+                            .font(.title3)
+                            .frame(width: 34, height: 34)
                     }
+                    .buttonStyle(.borderless)
+                    .help("New folder")
                 }
             }
-            .contextMenu {
-                Button {
-                    library.create("# Untitled note\n\n")
-                } label: {
-                    Label("New note", systemImage: "square.and.pencil")
-                }
-                Button {
-                    newFolderName = ""
-                    showCreateFolderSheet = true
-                } label: {
-                    Label("New folder", systemImage: "folder.badge.plus")
-                }
-                Divider()
-                Button {
-                    library.reload()
-                } label: {
-                    Label("Refresh notes", systemImage: "arrow.clockwise")
-                }
+        }
+        .contextMenu {
+            Button {
+                library.create("# Untitled note\n\n")
+            } label: {
+                Label("New note", systemImage: "square.and.pencil")
             }
-            .navigationTitle("Notes")
-            .navigationSplitViewColumnWidth(min: 220, ideal: 260)
-        } detail: {
-            VStack(alignment: .leading, spacing: 0) {
-                if let error = library.error ?? appState.errorMessage {
-                    Text(error).foregroundStyle(.red).padding()
-                }
-                if appState.isRecording || appState.isTranscribing {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label(
-                            appState.noteUpdateTargetID == nil
-                                ? "Taking note"
-                                : (appState.noteVoiceAction == .append ? "Appending to note" : "Updating note"),
-                            systemImage: appState.isRecording ? "waveform" : "ellipsis.circle"
-                        )
-                        .font(.headline)
-                        .foregroundStyle(.tint)
-                        ScrollView {
-                            Text(liveTranscript.isEmpty ? "Listening…" : liveTranscript)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .textSelection(.enabled)
-                        }
-                        .frame(maxHeight: 150)
-                    }
-                    .padding(14)
-                    .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-                    .padding(.horizontal, 18)
-                    .padding(.top, 12)
-                }
-                if let note = library.notes.first(where: { $0.id == library.selectedID }) {
+            Button {
+                newFolderName = ""
+                showCreateFolderSheet = true
+            } label: {
+                Label("New folder", systemImage: "folder.badge.plus")
+            }
+            Divider()
+            Button {
+                library.reload()
+            } label: {
+                Label("Refresh notes", systemImage: "arrow.clockwise")
+            }
+        }
+        .navigationTitle("Notes")
+        .navigationSplitViewColumnWidth(min: 220, ideal: 260)
+    }
+
+    private var notesDetail: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let error = library.error ?? appState.errorMessage {
+                Text(error).foregroundStyle(.red).padding()
+            }
+            noteRecordingStatus
+            if let note = library.notes.first(where: { $0.id == library.selectedID }) {
+                if let proposal = appState.pendingNoteUpdate, proposal.noteID == note.id {
+                    noteUpdatePreview(proposal, note: note)
+                } else {
                     noteHeader(note)
                     if preview {
                         ScrollView {
-                            MarkdownPreview(markdown: note.markdown)
+                            NoteMarkdownPreview(markdown: note.markdown, note: note)
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(28)
                         }
                     } else {
-                        TextEditor(text: Binding(get: {
-                            library.notes.first(where: { $0.id == note.id })?.markdown ?? ""
-                        }, set: { library.edit(id: note.id, markdown: $0) }))
-                        .font(.system(.body, design: .monospaced)).padding(18)
+                        noteEditor(for: note)
                     }
-                } else {
-                    VStack(spacing: 14) {
-                        Image(systemName: "waveform").font(.system(size: 42)).foregroundStyle(.tint)
-                        Text("Speak your next note").font(.title)
-                        Text("Stop recording to turn your words into a saved Markdown note.")
-                            .foregroundStyle(.secondary)
-                    }.frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                Divider()
-                HStack {
-                    Circle().fill(appState.isRecording ? Color.red : Color.secondary).frame(width: 7, height: 7)
-                    Text(appState.statusText)
-                    Spacer()
-                    Text("Markdown · saved locally")
-                }.font(.caption).foregroundStyle(.secondary).padding(12)
+            } else {
+                VStack(spacing: 14) {
+                    Image(systemName: "waveform").font(.system(size: 42)).foregroundStyle(.tint)
+                    Text("Speak your next note").font(.title)
+                    Text("Stop recording to turn your words into a saved Markdown note.")
+                        .foregroundStyle(.secondary)
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            Divider()
+            noteStatusFooter
+        }
+    }
+
+    var body: some View {
+        NavigationSplitView {
+            notesSidebar
+        } detail: {
+            notesDetail
+        }
+        .onChange(of: library.selectedID) { _ in
+            editorSelection = NSRange(location: 0, length: 0)
         }
         .toolbar {
             ToolbarItem {
@@ -377,81 +518,114 @@ struct NotesView: View {
                 .disabled(appState.isTranscribing)
             }
         }
-        .confirmationDialog(
-            "Delete this note?",
-            isPresented: $showDeleteConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("Delete", role: .destructive) {
-                library.deleteSelected()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This permanently deletes the Markdown file from your notes folder.")
+    }
+
+    private func chooseAttachment(for note: MarkdownNote) {
+        let panel = NSOpenPanel()
+        panel.title = "Choose an attachment"
+        panel.prompt = "Insert"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            insertAttachment(Self.attachmentPayload(for: url), for: note)
         }
-        .sheet(isPresented: $showMoveSheet) {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Move note").font(.title2.weight(.semibold))
-                Text("Enter a folder name. Use a slash for nested folders, or leave it empty for Inbox.")
-                    .font(.caption).foregroundStyle(.secondary)
-                TextField("Folder, e.g. Projects/Ideas", text: $destinationFolder)
-                    .textFieldStyle(.roundedBorder)
-                HStack {
-                    Spacer()
-                    Button("Cancel") { showMoveSheet = false }
-                    Button("Move") {
-                        library.moveSelected(to: destinationFolder)
-                        showMoveSheet = false
-                    }.keyboardShortcut(.defaultAction)
+    }
+
+    private func noteEditor(for note: MarkdownNote) -> some View {
+        MarkdownNoteEditor(
+            text: Binding(
+                get: { library.notes.first(where: { $0.id == note.id })?.markdown ?? "" },
+                set: { library.edit(id: note.id, markdown: $0) }
+            ),
+            selectedRange: $editorSelection,
+            importAttachment: { payload in importAttachment(payload, for: note) }
+        )
+        .padding(18)
+        .id(note.id)
+    }
+
+    private var noteStatusFooter: some View {
+        HStack {
+            Circle()
+                .fill(appState.isRecording ? Color.red : Color.secondary)
+                .frame(width: 7, height: 7)
+            Text(appState.statusText)
+            Spacer()
+            Text("Markdown · saved locally")
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(12)
+    }
+
+    private func insertAttachment(_ payload: NoteAttachmentPayload, for note: MarkdownNote) {
+        guard let path = library.importAttachment(payload, for: note.id),
+              let currentMarkdown = library.notes.first(where: { $0.id == note.id })?.markdown else { return }
+
+        let markdown = attachmentMarkdown(for: payload, path: path)
+        let currentNSString = currentMarkdown as NSString
+        let location = min(max(editorSelection.location, 0), currentNSString.length)
+        let length = min(max(editorSelection.length, 0), currentNSString.length - location)
+        let replacementRange = NSRange(location: location, length: length)
+        let updatedMarkdown = currentNSString.replacingCharacters(in: replacementRange, with: markdown)
+        library.edit(id: note.id, markdown: updatedMarkdown)
+        editorSelection = NSRange(location: location + (markdown as NSString).length, length: 0)
+    }
+
+    private func importAttachment(_ payload: NoteAttachmentPayload, for note: MarkdownNote) -> String? {
+        library.importAttachment(payload, for: note.id).map { path in
+            attachmentMarkdown(for: payload, path: path)
+        }
+    }
+
+    private func attachmentMarkdown(for payload: NoteAttachmentPayload, path: String) -> String {
+        switch payload.kind {
+        case .image:
+            return "\n\n![\(payload.fileName)](\(path))\n\n"
+        case .video, .audio, .text, .pdf, .file:
+            return "\n\n[\(payload.fileName)](\(path))\n\n"
+        }
+    }
+
+    private static func attachmentPayload(for url: URL) -> NoteAttachmentPayload {
+        let type = UTType(filenameExtension: url.pathExtension)
+        let kind: NoteAttachmentKind
+        if type?.conforms(to: .image) == true { kind = .image }
+        else if type?.conforms(to: .movie) == true { kind = .video }
+        else if type?.conforms(to: .audio) == true { kind = .audio }
+        else if type?.conforms(to: .pdf) == true { kind = .pdf }
+        else if type?.conforms(to: .text) == true { kind = .text }
+        else { kind = .file }
+        return NoteAttachmentPayload(sourceURL: url, imageData: nil, fileName: url.lastPathComponent, kind: kind)
+    }
+
+    private func noteUpdatePreview(_ proposal: PendingNoteUpdate, note: MarkdownNote) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(proposal.action == .append ? "Preview appended note" : "Preview updated note")
+                        .font(.title2.weight(.semibold))
+                    Text("Review the complete Markdown result before applying it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-            }
-            .padding(24)
-            .frame(width: 420)
-        }
-        .sheet(isPresented: $showCreateFolderSheet) {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("New folder").font(.title2.weight(.semibold))
-                Text("Use a slash for nested folders, such as Projects/Ideas.")
-                    .font(.caption).foregroundStyle(.secondary)
-                TextField("Folder name", text: $newFolderName)
-                    .textFieldStyle(.roundedBorder)
-                HStack {
-                    Spacer()
-                    Button("Cancel") { showCreateFolderSheet = false }
-                    Button("Create") {
-                        library.createFolder(newFolderName)
-                        showCreateFolderSheet = false
-                    }
+                Spacer()
+                Button("Revert") { appState.cancelPendingNoteUpdate() }
+                Button("Apply update") { appState.confirmPendingNoteUpdate() }
+                    .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(newFolderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
             }
-            .padding(24)
-            .frame(width: 420)
-        }
-        .sheet(isPresented: $showRenameSheet) {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Rename folder").font(.title2.weight(.semibold))
-                Text("This renames the selected folder and keeps nested folders underneath it.")
-                    .font(.caption).foregroundStyle(.secondary)
-                TextField("New folder name", text: $renameFolderName)
-                    .textFieldStyle(.roundedBorder)
-                HStack {
-                    Spacer()
-                    Button("Cancel") { showRenameSheet = false }
-                    Button("Rename") {
-                        if let folder = selectedFolderForRename ?? selectedNoteFolder {
-                            library.renameFolder(from: folder, to: renameFolderName)
-                        }
-                        selectedFolderForRename = nil
-                        showRenameSheet = false
-                    }.keyboardShortcut(.defaultAction)
-                }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .background(.quaternary.opacity(0.35))
+            ScrollView {
+                Markdown(proposal.markdown, baseURL: MarkdownNoteStore.standard.noteFolderURL(for: note))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(28)
             }
-            .padding(24)
-            .frame(width: 420)
         }
-        .frame(minWidth: 800, minHeight: 520)
     }
 
     private func folderHeader(_ folder: String) -> some View {
@@ -477,17 +651,32 @@ struct NotesView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
             if !folder.isEmpty {
-                Button {
-                    selectedFolderForRename = folder
-                    renameFolderName = folder
-                    showRenameSheet = true
+                Menu {
+                    Button {
+                        selectedFolderForRename = folder
+                        renameFolderName = folder
+                        showRenameSheet = true
+                    } label: {
+                        Label("Rename folder", systemImage: "pencil")
+                    }
+                    Button(role: .destructive) {
+                        selectedFolderForDelete = folder
+                        showDeleteFolderConfirmation = true
+                    } label: {
+                        Label("Delete folder", systemImage: "trash")
+                    }
                 } label: {
                     Image(systemName: "ellipsis")
-                        .font(.body)
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(Color(nsColor: .labelColor))
                         .frame(width: 28, height: 28)
                 }
                 .buttonStyle(.borderless)
-                .help("Rename folder")
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .tint(Color(nsColor: .labelColor))
+                .foregroundStyle(Color(nsColor: .labelColor))
+                .help("Folder actions")
             }
         }
         .contentShape(Rectangle())
@@ -505,21 +694,51 @@ struct NotesView: View {
             }
             Spacer(minLength: 12)
             Button {
-                appState.startNoteUpdate(noteID: note.id)
+                library.undoSelectedNote()
             } label: {
-                Label("Update", systemImage: "wand.and.stars")
+                NotesHeaderIconControl(systemName: "arrow.uturn.backward")
             }
+            .buttonStyle(.plain)
+            .disabled(!library.canUndoSelectedNote)
+            .accessibilityLabel("Undo")
+            .help("Undo the last note edit")
+            Menu {
+                Button {
+                    appState.startNoteUpdate(noteID: note.id)
+                } label: {
+                    Label("Update", systemImage: "wand.and.stars")
+                }
+                Button {
+                    appState.startNoteAppend(noteID: note.id)
+                } label: {
+                    Label("Append", systemImage: "text.append")
+                }
+            } label: {
+                NotesHeaderIconControl(systemName: "sparkles")
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
             .disabled(appState.isRecording || appState.isTranscribing)
+            .accessibilityLabel("Note actions")
+            .help("Update or append to this note")
+            .menuIndicator(.hidden)
             Button {
-                appState.startNoteAppend(noteID: note.id)
+                chooseAttachment(for: note)
             } label: {
-                Label("Append", systemImage: "text.append")
+                NotesHeaderIconControl(systemName: "paperclip")
             }
-            .disabled(appState.isRecording || appState.isTranscribing)
-            Toggle(isOn: $preview) {
-                Label("Preview", systemImage: "eye")
+            .buttonStyle(.plain)
+            .disabled(preview || appState.isRecording || appState.isTranscribing)
+            .accessibilityLabel("Insert attachment")
+            .help("Insert an attachment at the cursor")
+            Button {
+                preview.toggle()
+            } label: {
+                NotesHeaderIconControl(systemName: "eye", tint: preview ? .accentColor : nil)
             }
-            .toggleStyle(.button)
+            .buttonStyle(.plain)
+            .accessibilityLabel("Preview")
+            .help("Toggle Markdown preview")
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
@@ -608,100 +827,4 @@ struct NotesView: View {
 
 extension Notification.Name {
     static let showNotes = Notification.Name("showNotes")
-}
-
-private struct MarkdownPreview: View {
-    let markdown: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(markdown.split(separator: "\n", omittingEmptySubsequences: false).enumerated()), id: \.offset) { _, line in
-                lineView(String(line))
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func lineView(_ line: String) -> some View {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty {
-            Spacer().frame(height: 4)
-        } else if let heading = headingContent(from: trimmed) {
-            inlineText(heading.text)
-                .font(heading.font)
-                .padding(.top, 8)
-        } else if let bullet = listContent(from: trimmed) {
-            HStack(alignment: .top, spacing: 8) {
-                Text(bullet.marker).font(.body.weight(.semibold))
-                inlineText(bullet.text)
-            }
-            .padding(.leading, bullet.indent)
-        } else if trimmed.hasPrefix("> ") {
-            inlineText(String(trimmed.dropFirst(2)))
-                .italic()
-                .padding(.leading, 12)
-                .overlay(alignment: .leading) {
-                    Rectangle().fill(.secondary).frame(width: 3)
-                }
-        } else {
-            inlineText(trimmed)
-        }
-    }
-
-    private func headingContent(from line: String) -> (text: String, font: Font)? {
-        let hashes = line.prefix { $0 == "#" }
-        guard !hashes.isEmpty,
-              line.dropFirst(hashes.count).first == " " else { return nil }
-        let text = String(line.dropFirst(hashes.count)).trimmingCharacters(in: .whitespaces)
-        let font: Font
-        switch hashes.count {
-        case 1: font = .title2.weight(.bold)
-        case 2: font = .title3.weight(.bold)
-        default: font = .headline.weight(.semibold)
-        }
-        return (text, font)
-    }
-
-    private func listContent(from line: String) -> (marker: String, text: String, indent: CGFloat)? {
-        for marker in ["- ", "* ", "+ "] where line.hasPrefix(marker) {
-            return ("•", String(line.dropFirst(marker.count)), 0)
-        }
-        var digits = ""
-        for character in line {
-            guard character.isNumber else { break }
-            digits.append(character)
-        }
-        guard !digits.isEmpty, line.dropFirst(digits.count).hasPrefix(". ") else { return nil }
-        return (digits + ".", String(line.dropFirst(digits.count + 2)), 0)
-    }
-
-    private func inlineText(_ source: String) -> Text {
-        var result = Text("")
-        var remaining = source[...]
-        while !remaining.isEmpty {
-            let markers = ["**", "*", "`"]
-            guard let next = markers.compactMap({ marker in
-                remaining.range(of: marker).map { (range: $0, marker: marker) }
-            }).min(by: { $0.range.lowerBound < $1.range.lowerBound }) else {
-                result = result + Text(String(remaining))
-                break
-            }
-            if next.range.lowerBound > remaining.startIndex {
-                result = result + Text(String(remaining[..<next.range.lowerBound]))
-            }
-            let afterMarker = remaining[next.range.upperBound...]
-            guard let closing = afterMarker.range(of: next.marker) else {
-                result = result + Text(String(remaining[next.range.lowerBound...]))
-                break
-            }
-            let content = String(afterMarker[..<closing.lowerBound])
-            switch next.marker {
-            case "**": result = result + Text(content).bold()
-            case "*": result = result + Text(content).italic()
-            default: result = result + Text(content).font(.system(.body, design: .monospaced))
-            }
-            remaining = afterMarker[closing.upperBound...]
-        }
-        return result
-    }
 }

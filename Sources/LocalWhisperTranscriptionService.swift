@@ -296,12 +296,11 @@ final class LocalWhisperTranscriptionService: AudioTranscriber {
         }
     }
 
-    /// Transcribes a short in-memory PCM16 snapshot. AudioRecorder emits
-    /// 24 kHz mono PCM16 for realtime consumers, so the snapshot is wrapped
-    /// in a minimal WAV container before invoking whisper-cli.
-    func transcribePCM16(_ samples: Data, sampleRate: Int = 24_000) async throws -> String {
+    /// Transcribes a short in-memory PCM16 snapshot. AudioRecorder emits the
+    /// same 16 kHz mono PCM16 used by the saved recording.
+    func transcribePCM16(_ samples: Data, sampleRate: Int = 16_000) async throws -> String {
         guard !samples.isEmpty else { throw LocalWhisperError.emptyTranscript }
-        if sampleRate == 24_000, let inProcessSession {
+        if sampleRate == 16_000, let inProcessSession {
             return try inProcessSession.transcribe(pcm16: samples)
         }
         let temporaryURL = FileManager.default.temporaryDirectory
@@ -314,7 +313,12 @@ final class LocalWhisperTranscriptionService: AudioTranscriber {
     func makeLivePreviewSession(
         onUpdate: @escaping @Sendable (String) -> Void
     ) -> LocalWhisperPreviewSession {
-        LocalWhisperPreviewSession(transcriber: self, onUpdate: onUpdate)
+        LocalWhisperPreviewSession(
+            transcribe: { [self] samples, sampleRate in
+                try await transcribePCM16(samples, sampleRate: sampleRate)
+            },
+            onUpdate: onUpdate
+        )
     }
 
     static func makeWAVData(pcm16: Data, sampleRate: Int) -> Data {
@@ -447,43 +451,50 @@ private extension Data {
 /// is transcribed again after stop, so preview latency never changes the
 /// authoritative note contents.
 final class LocalWhisperPreviewSession: @unchecked Sendable {
-    private let transcriber: LocalWhisperTranscriptionService
+    private let transcribe: @Sendable (Data, Int) async throws -> String
     private let onUpdate: @Sendable (String) -> Void
     private let stateLock = OSAllocatedUnfairLock(initialState: ())
     private var audio = Data()
     private var committedTranscript = ""
-    private var processing = false
     private var stopped = false
+    private var workerRunning = false
     private var workerTask: Task<Void, Never>?
 
-    private let sampleRate = 24_000
-    private let chunkFrames = 24_000 * 5
-    private let maxBufferedFrames = 24_000 * 20
+    private let sampleRate = 16_000
+    private let chunkFrames = 16_000 * 3
+    private let maxBufferedFrames = 16_000 * 20
 
     init(
-        transcriber: LocalWhisperTranscriptionService,
+        transcribe: @escaping @Sendable (Data, Int) async throws -> String,
         onUpdate: @escaping @Sendable (String) -> Void
     ) {
-        self.transcriber = transcriber
+        self.transcribe = transcribe
         self.onUpdate = onUpdate
     }
 
     func appendPCM16(_ samples: Data) {
         guard !samples.isEmpty else { return }
-        let snapshot: Data? = stateLock.withLock {
-            guard !stopped else { return nil }
+        let shouldStartWorker = stateLock.withLock { () -> Bool in
+            guard !stopped else { return false }
             audio.append(samples)
             let bytesPerFrame = MemoryLayout<Int16>.size
             let maxBytes = maxBufferedFrames * bytesPerFrame
             if audio.count > maxBytes {
                 audio.removeFirst(audio.count - maxBytes)
             }
-            return nextChunkIfReadyLocked()
+            let chunkBytes = chunkFrames * bytesPerFrame
+            guard !workerRunning, audio.count >= chunkBytes else { return false }
+            workerRunning = true
+            return true
         }
 
-        guard let snapshot else { return }
-        workerTask = Task { [weak self] in
-            await self?.process(snapshot)
+        guard shouldStartWorker else { return }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.drainAudio()
+        }
+        stateLock.withLock {
+            workerTask = task
         }
     }
 
@@ -492,17 +503,42 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
             stopped = true
             workerTask?.cancel()
             workerTask = nil
+            workerRunning = false
         }
     }
 
-    private func nextChunkIfReadyLocked() -> Data? {
-        guard !processing else { return nil }
+    private func nextChunkLocked() -> Data? {
         let chunkBytes = chunkFrames * MemoryLayout<Int16>.size
         guard audio.count >= chunkBytes else { return nil }
-        processing = true
         let chunk = Data(audio.prefix(chunkBytes))
         audio.removeFirst(chunkBytes)
         return chunk
+    }
+
+    private func drainAudio() async {
+        while !Task.isCancelled {
+            let snapshot: Data? = stateLock.withLock {
+                guard !stopped else {
+                    workerRunning = false
+                    return nil
+                }
+                return nextChunkLocked()
+            }
+
+            guard let snapshot else {
+                stateLock.withLock {
+                    workerRunning = false
+                    workerTask = nil
+                }
+                return
+            }
+            await process(snapshot)
+        }
+
+        stateLock.withLock {
+            workerRunning = false
+            workerTask = nil
+        }
     }
 
     private func process(_ snapshot: Data) async {
@@ -511,7 +547,7 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
             // long recordings inexpensive while preserving the recorder's
             // complete audio for final transcription.
             if containsSpeech(snapshot) {
-                let transcript = try await transcriber.transcribePCM16(snapshot, sampleRate: sampleRate)
+                let transcript = try await transcribe(snapshot, sampleRate)
                 try Task.checkCancellation()
                 if !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     let committed: String = stateLock.withLock {
@@ -530,24 +566,6 @@ final class LocalWhisperPreviewSession: @unchecked Sendable {
         } catch {
             // Preview failures are non-fatal; the final stop-time transcription
             // still reports actionable errors to the user.
-        }
-
-        let nextSnapshot: Data? = stateLock.withLock {
-            if stopped {
-                processing = false
-                return nil
-            }
-            let next = nextChunkIfReadyLocked()
-            if next == nil {
-                processing = false
-            }
-            return next
-        }
-
-        if let nextSnapshot {
-            workerTask = Task { [weak self] in
-                await self?.process(nextSnapshot)
-            }
         }
     }
 

@@ -4,7 +4,11 @@ enum MarkdownNoteStoreTests {
     static func run() {
         testTextChunking()
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let sourceAttachment = directory.deletingLastPathComponent().appendingPathComponent("source.png")
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+            try? FileManager.default.removeItem(at: sourceAttachment)
+        }
         let store = MarkdownNoteStore(directory: directory)
         do {
             let initial = try store.load()
@@ -23,14 +27,20 @@ enum MarkdownNoteStoreTests {
             let afterEdit = try store.load()
             TestSupport.expectEqual(afterEdit.count, 1)
             TestSupport.expectEqual(afterEdit.first?.markdown, edited.markdown)
+            try Data([0x89, 0x50, 0x4E, 0x47]).write(to: sourceAttachment)
+            let attachmentPath = try store.importAttachment(from: sourceAttachment, for: note)
+            TestSupport.expect(FileManager.default.fileExists(atPath: store.attachmentURL(for: note, relativePath: attachmentPath)!.path), "Imported attachments must be stored beside their note")
+            TestSupport.expect(!store.loadFolders().contains(note.id.uuidString), "Note attachment directories must not appear as folders")
             let folderNote = MarkdownNote(id: UUID(), markdown: "# Folder note", modified: Date(), folder: "Projects/Ideas")
             try store.save(folderNote)
+            let folderAttachment = try store.importAttachment(from: sourceAttachment, for: folderNote)
             let nested = try store.load().first(where: { $0.id == folderNote.id })
             TestSupport.expectEqual(nested?.folder, "Projects/Ideas")
             let moved = try store.move(folderNote, toFolder: "Archive/2026")
             TestSupport.expectEqual(moved.folder, "Archive/2026")
             let movedReloaded = try store.load().first(where: { $0.id == folderNote.id })
             TestSupport.expect(movedReloaded?.folder == "Archive/2026", "Moved notes must load from their new folder")
+            TestSupport.expect(FileManager.default.fileExists(atPath: store.attachmentURL(for: movedReloaded!, relativePath: folderAttachment)!.path), "Moving a note must move its attachments")
             try store.renameFolder(from: "Archive", to: "Done")
             let renamedReloaded = try store.load().first(where: { $0.id == folderNote.id })
             TestSupport.expect(renamedReloaded?.folder == "Done/2026", "Folder rename must move the directory atomically")
@@ -74,6 +84,14 @@ enum MarkdownNoteStoreTests {
         TestSupport.expectEqual(
             MarkdownNoteStore.mergeTranscripts(["First section", "Second section"]),
             "First section\n\nSecond section"
+        )
+        let protected = MarkdownNoteStore.protectMarkdownReferences(
+            "Before\n\n![image](note/image.png)\n\n[site](https://example.com)"
+        )
+        TestSupport.expectEqual(protected.markdown, "Before\n\nATTACHMENT_1\n\nATTACHMENT_2")
+        TestSupport.expectEqual(
+            protected.restore(in: protected.markdown),
+            "Before\n\n![image](note/image.png)\n\n[site](https://example.com)"
         )
     }
 }
