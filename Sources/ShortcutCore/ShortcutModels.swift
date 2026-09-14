@@ -56,12 +56,14 @@ enum ShortcutRole {
     case hold
     case toggle
     case copyAgain
+    case generate
 
     var title: String {
         switch self {
         case .hold: return "Hold to Talk"
         case .toggle: return "Tap to Toggle"
         case .copyAgain: return "Paste Again"
+        case .generate: return "Generate"
         }
     }
 }
@@ -72,23 +74,28 @@ enum ShortcutEvent: Equatable {
     case toggleActivated
     case toggleDeactivated
     case copyAgainTriggered
+    case generateActivated
+    case generateDeactivated
 }
 
 struct ShortcutConfiguration: Equatable {
     let hold: ShortcutBinding
     let toggle: ShortcutBinding
     let copyAgain: ShortcutBinding
+    let generate: ShortcutBinding
     let permittedAdditionalExactMatchModifiers: ShortcutModifiers
 
     init(
         hold: ShortcutBinding,
         toggle: ShortcutBinding,
         copyAgain: ShortcutBinding = .disabled,
+        generate: ShortcutBinding = .disabled,
         permittedAdditionalExactMatchModifiers: ShortcutModifiers = []
     ) {
         self.hold = hold
         self.toggle = toggle
         self.copyAgain = copyAgain
+        self.generate = generate
         self.permittedAdditionalExactMatchModifiers = permittedAdditionalExactMatchModifiers
     }
 

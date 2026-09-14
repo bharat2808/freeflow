@@ -11,6 +11,7 @@ struct DictationShortcutEditor: View {
     @State private var holdValidationMessage: String?
     @State private var toggleValidationMessage: String?
     @State private var copyAgainValidationMessage: String?
+    @State private var generateValidationMessage: String?
 
     init(showsIntroText: Bool = true, onCaptureStateChange: ((Bool) -> Void)? = nil) {
         self.showsIntroText = showsIntroText
@@ -20,7 +21,7 @@ struct DictationShortcutEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             if showsIntroText {
-                Text("Hold to record, tap to start and stop, and press the toggle shortcut while holding to latch into tap mode. You can disable either workflow or turn both shortcuts off.")
+                Text("Hold to dictate, use Generate to create new content from a spoken request, or tap to start and stop. You can disable any shortcut.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -41,6 +42,19 @@ struct DictationShortcutEditor: View {
                 ),
                 onSelect: { binding in
                     holdValidationMessage = appState.setShortcut(binding, for: .hold)
+                }
+            )
+
+            ShortcutRoleSection(
+                role: .generate,
+                selection: appState.generateShortcut,
+                validationMessage: generateValidationMessage,
+                isCapturing: Binding(
+                    get: { activeCaptureRole == .generate },
+                    set: { activeCaptureRole = $0 ? .generate : nil }
+                ),
+                onSelect: { binding in
+                    generateValidationMessage = appState.setShortcut(binding, for: .generate)
                 }
             )
 

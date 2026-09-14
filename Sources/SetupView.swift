@@ -65,6 +65,7 @@ struct SetupView: View {
         case holdShortcut
         case toggleShortcut
         case copyAgainShortcut
+        case generateShortcut
         case commandMode
         case vocabulary
         case launchAtLogin
@@ -107,15 +108,17 @@ struct SetupView: View {
     @State private var holdShortcutValidationMessage: String?
     @State private var toggleShortcutValidationMessage: String?
     @State private var copyAgainShortcutValidationMessage: String?
+    @State private var generateShortcutValidationMessage: String?
     @State private var isCapturingHoldShortcut = false
     @State private var isCapturingToggleShortcut = false
     @State private var isCapturingCopyAgainShortcut = false
+    @State private var isCapturingGenerateShortcut = false
     @StateObject private var testHotkeyHarness = SetupTestHotkeyHarness()
     @AppStorage("use_compact_overlay") private var useCompactOverlay = true
 
     private let totalSteps: [SetupStep] = SetupStep.allCases
     private var isCapturingShortcut: Bool {
-        isCapturingHoldShortcut || isCapturingToggleShortcut || isCapturingCopyAgainShortcut
+        isCapturingHoldShortcut || isCapturingToggleShortcut || isCapturingCopyAgainShortcut || isCapturingGenerateShortcut
     }
 
     var body: some View {
@@ -255,6 +258,8 @@ struct SetupView: View {
             toggleShortcutStep
         case .copyAgainShortcut:
             copyAgainShortcutStep
+        case .generateShortcut:
+            generateShortcutStep
         case .commandMode:
             commandModeStep
         case .vocabulary:
@@ -556,10 +561,13 @@ struct SetupView: View {
                 }
                 .disabled(isInstallingLocalWhisper || LocalWhisperInstaller.installedExecutableURL != nil)
 
-                Button(isDownloadingLocalWhisperModel ? "Downloading…" : "Download model") {
+                let modelDownloaded = FileManager.default.fileExists(
+                    atPath: LocalWhisperModelDownloader.baseEnglishModelPath.path
+                )
+                Button(isDownloadingLocalWhisperModel ? "Downloading…" : (modelDownloaded ? "Downloaded" : "Download model")) {
                     downloadLocalWhisperModel()
                 }
-                .disabled(isDownloadingLocalWhisperModel)
+                .disabled(isDownloadingLocalWhisperModel || modelDownloaded)
             }
 
             if isInstallingLocalWhisper {
@@ -796,6 +804,41 @@ struct SetupView: View {
                 .padding(.top, 10)
 
             if appState.copyAgainShortcut.usesFnKey {
+                Text("Tip: If Fn opens Emoji picker, go to System Settings > Keyboard and change \"Press fn key to\" to \"Do Nothing\".")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+            }
+        }
+    }
+
+    var generateShortcutStep: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 60))
+                .foregroundStyle(.blue)
+
+            Text("Generate Shortcut")
+                .font(.title)
+                .fontWeight(.bold)
+
+            Text("Choose the shortcut to hold while speaking a request for newly generated content. FreeFlow will use the active app context and paste the generated result into the focused field. You can disable this if you do not need it.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            ShortcutRoleSection(
+                role: .generate,
+                selection: appState.generateShortcut,
+                validationMessage: generateShortcutValidationMessage,
+                isCapturing: $isCapturingGenerateShortcut,
+                onSelect: { binding in
+                    generateShortcutValidationMessage = appState.setShortcut(binding, for: .generate)
+                }
+            )
+                .padding(.top, 10)
+
+            if appState.generateShortcut.usesFnKey {
                 Text("Tip: If Fn opens Emoji picker, go to System Settings > Keyboard and change \"Press fn key to\" to \"Do Nothing\".")
                     .font(.caption)
                     .foregroundStyle(.orange)

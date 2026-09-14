@@ -403,7 +403,12 @@ struct ProviderSettingsFields: View {
                                     ) ? "checkmark.circle.fill" : "arrow.down.circle")
                             )
                         }
-                        .disabled(isDownloadingLocalWhisperModel)
+                        .disabled(
+                            isDownloadingLocalWhisperModel
+                                || FileManager.default.fileExists(
+                                    atPath: LocalWhisperModelDownloader.baseEnglishModelPath.path
+                                )
+                        )
                         if isDownloadingLocalWhisperModel {
                             ProgressView(value: localWhisperDownloadProgress)
                                 .frame(width: 120)
@@ -1792,6 +1797,7 @@ struct PromptsSettingsView: View {
     @EnvironmentObject var appState: AppState
     @State private var customSystemPromptInput: String = ""
     @State private var noteSystemPromptInput: String = ""
+    @State private var generateSystemPromptInput: String = ""
     @State private var customContextPromptInput: String = ""
     @FocusState private var customSystemPromptFocused: Bool
     @FocusState private var customContextPromptFocused: Bool
@@ -1820,6 +1826,9 @@ struct PromptsSettingsView: View {
                 SettingsCard("Note-taking Prompt", icon: "note.text") {
                     notePromptSection
                 }
+                SettingsCard("Generate Prompt", icon: "sparkles") {
+                    generatePromptSection
+                }
                 SettingsCard("Instruction Guard", icon: "shield.lefthalf.filled") {
                     instructionGuardSection
                 }
@@ -1836,6 +1845,9 @@ struct PromptsSettingsView: View {
             noteSystemPromptInput = appState.noteSystemPrompt.isEmpty
                 ? MarkdownNoteStore.systemPrompt
                 : appState.noteSystemPrompt
+            generateSystemPromptInput = appState.generateSystemPrompt.isEmpty
+                ? PostProcessingService.defaultGenerateSystemPrompt
+                : appState.generateSystemPrompt
             customContextPromptInput = appState.customContextPrompt.isEmpty
                 ? AppContextService.defaultContextPrompt
                 : appState.customContextPrompt
@@ -1843,6 +1855,7 @@ struct PromptsSettingsView: View {
         .onDisappear {
             commitCustomSystemPrompt()
             commitNoteSystemPrompt()
+            commitGenerateSystemPrompt()
             commitCustomContextPrompt()
         }
     }
@@ -1879,6 +1892,38 @@ struct PromptsSettingsView: View {
         let trimmed = noteSystemPromptInput.trimmingCharacters(in: .whitespacesAndNewlines)
         let defaultTrimmed = MarkdownNoteStore.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         appState.noteSystemPrompt = trimmed == defaultTrimmed ? "" : trimmed
+    }
+
+    private func commitGenerateSystemPrompt() {
+        let trimmed = generateSystemPromptInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let defaultTrimmed = PostProcessingService.defaultGenerateSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        appState.generateSystemPrompt = trimmed == defaultTrimmed ? "" : trimmed
+    }
+
+    private var generatePromptSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Controls how spoken requests are turned into newly generated content. Unlike Dictate, this prompt is allowed to answer or fulfill the request.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextEditor(text: $generateSystemPromptInput)
+                .font(.system(.body, design: .monospaced))
+                .frame(minHeight: 140, maxHeight: 240)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
+
+            HStack {
+                Label(appState.generateSystemPrompt.isEmpty ? "Using default" : "Using custom prompt",
+                      systemImage: appState.generateSystemPrompt.isEmpty ? "checkmark.circle" : "pencil")
+                    .font(.caption)
+                    .foregroundStyle(appState.generateSystemPrompt.isEmpty ? Color.secondary : Color.blue)
+                Spacer()
+                Button("Reset to Default") {
+                    generateSystemPromptInput = PostProcessingService.defaultGenerateSystemPrompt
+                    appState.generateSystemPrompt = ""
+                }
+                .font(.caption)
+            }
+        }
     }
 
     private var notePromptSection: some View {

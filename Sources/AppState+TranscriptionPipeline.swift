@@ -49,6 +49,29 @@ extension AppState {
         )
     }
 
+    func processGeneratedRequest(
+        _ instruction: String,
+        context: AppContext,
+        postProcessingService: PostProcessingService
+    ) async -> (finalTranscript: String, outcome: TranscriptProcessingOutcome, prompt: String) {
+        do {
+            let result = try await postProcessingService.generate(
+                instruction: instruction,
+                context: context,
+                customVocabulary: customVocabulary,
+                customSystemPrompt: generateSystemPrompt,
+                outputLanguage: outputLanguage
+            )
+            return (result.transcript, .generationSucceeded, result.prompt)
+        } catch {
+            os_log(.error, log: transcriptionPipelineLog, "generation failed: %{public}@", error.localizedDescription)
+            await MainActor.run {
+                self.errorMessage = "Generation failed: \(error.localizedDescription)"
+            }
+            return ("", .generationFailed, "")
+        }
+    }
+
     /// Await the realtime WebSocket's final transcript. If it errors out (or
     /// was never started) fall back to the file-based POST so the user still
     /// gets a transcript. Runs the realtime commit and file upload in that
@@ -132,7 +155,9 @@ extension AppState {
         cancelRecordingInitializationTimer()
         shortcutSessionController.reset()
         let sessionIntent = currentSessionIntent
+        pendingGeneration = false
         let shouldSaveAsNote = activeNoteRecording
+        let generationNoteContext = activeGenerationNoteContext
         activeRecordingTriggerMode = nil
         currentSessionIntent = .dictation
         activeNoteRecording = false
@@ -158,8 +183,9 @@ extension AppState {
                 screenshotError: nil
             )
         } else {
-            sessionContext = capturedContext
+            sessionContext = capturedContext?.withNoteGenerationContext(generationNoteContext)
         }
+        activeGenerationNoteContext = nil
         let inFlightContextTask = contextCaptureTask
         let noteUpdateTargetID = activeNoteUpdateTargetID ?? self.noteUpdateTargetID
         let noteVoiceAction = activeNoteUpdateAction ?? self.noteVoiceAction ?? .update
@@ -301,9 +327,9 @@ extension AppState {
                         appContext = sessionContext
                     } else if let inFlightContext = await inFlightContextTask?.value {
                         os_log(.info, log: transcriptionPipelineLog, "awaited in-flight context capture")
-                        appContext = inFlightContext
+                        appContext = inFlightContext.withNoteGenerationContext(generationNoteContext)
                     } else {
-                        appContext = self.fallbackContextAtStop()
+                        appContext = self.fallbackContextAtStop().withNoteGenerationContext(generationNoteContext)
                     }
                     let contextWaitElapsed = CFAbsoluteTimeGetCurrent() - contextWaitStartedAt
                     try Task.checkCancellation()
@@ -318,7 +344,13 @@ extension AppState {
                             : "Running post-processing"
                     }
                     let result: (finalTranscript: String, outcome: TranscriptProcessingOutcome, prompt: String)
-                    if let noteUpdateTarget {
+                    if sessionIntent.isGenerateMode {
+                        result = await self.processGeneratedRequest(
+                            parsedTranscript.transcript,
+                            context: appContext,
+                            postProcessingService: postProcessingService
+                        )
+                    } else if let noteUpdateTarget {
                         result = await self.processNoteUpdate(
                             instruction: parsedTranscript.transcript,
                             existingNote: noteUpdateTarget,
@@ -391,7 +423,11 @@ extension AppState {
                                 ? (self.noteSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                                     ? MarkdownNoteStore.systemPrompt
                                     : self.noteSystemPrompt)
-                                : Self.resolvedSystemPrompt(self.customSystemPrompt),
+                                : (sessionIntent.isGenerateMode
+                                    ? (self.generateSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                        ? PostProcessingService.defaultGenerateSystemPrompt
+                                        : self.generateSystemPrompt)
+                                    : Self.resolvedSystemPrompt(self.customSystemPrompt)),
                             context: appContext,
                             processingStatus: processingStatus,
                             intent: sessionIntent,
@@ -410,7 +446,11 @@ extension AppState {
                         if shouldSaveAsNote || noteUpdateTarget != nil {
                             self.overlayManager.dismiss()
                         }
-                        if trimmedFinalTranscript.isEmpty {
+                        if sessionIntent.isGenerateMode,
+                           case .generationFailed = result.outcome {
+                            self.statusText = "Generation failed"
+                            self.overlayManager.dismiss()
+                        } else if trimmedFinalTranscript.isEmpty {
                             self.statusText = "Nothing to transcribe"
                             self.noteUpdateTargetID = nil
                             self.noteVoiceAction = nil
@@ -461,7 +501,7 @@ extension AppState {
                         self.audioRecorder.cleanup()
                         self.refreshAvailableMicrophonesIfNeeded()
 
-                        self.scheduleReadyStatusReset(after: 3, matching: [completionStatusText, "Nothing to transcribe", saveFailureStatusText, "Note updated", "Note could not be updated", "Preview ready"])
+                        self.scheduleReadyStatusReset(after: 3, matching: [completionStatusText, "Nothing to transcribe", "Generation failed", saveFailureStatusText, "Note updated", "Note could not be updated", "Preview ready"])
                     }
                 } catch is CancellationError {
                     await MainActor.run {

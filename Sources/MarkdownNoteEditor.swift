@@ -27,7 +27,7 @@ struct MarkdownNoteEditor: NSViewRepresentable {
         Coordinator(text: text, selectedRange: selectedRange)
     }
 
-    func makeNSView(context: Context) -> AttachmentTextView {
+    func makeNSView(context: Context) -> NSScrollView {
         let textView = AttachmentTextView()
         textView.delegate = context.coordinator
         textView.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
@@ -36,6 +36,12 @@ struct MarkdownNoteEditor: NSViewRepresentable {
         textView.isSelectable = true
         textView.allowsUndo = true
         textView.drawsBackground = false
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.heightTracksTextView = false
         textView.textContainerInset = NSSize(width: 0, height: 4)
         textView.registerForDraggedTypes([.fileURL, .tiff, .png])
         textView.onAttachment = { payload, textView in
@@ -45,16 +51,25 @@ struct MarkdownNoteEditor: NSViewRepresentable {
         }
         textView.string = text.wrappedValue
         textView.setSelectedRange(clampedSelection(selectedRange.wrappedValue, for: textView.string))
-        return textView
+
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.documentView = textView
+        return scrollView
     }
 
-    func updateNSView(_ nsView: AttachmentTextView, context: Context) {
-        if nsView.string != text.wrappedValue {
-            nsView.string = text.wrappedValue
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        guard let textView = nsView.documentView as? AttachmentTextView else { return }
+        if textView.string != text.wrappedValue {
+            textView.string = text.wrappedValue
         }
-        let targetSelection = clampedSelection(selectedRange.wrappedValue, for: nsView.string)
-        if nsView.selectedRange() != targetSelection {
-            nsView.setSelectedRange(targetSelection)
+        let targetSelection = clampedSelection(selectedRange.wrappedValue, for: textView.string)
+        if textView.selectedRange() != targetSelection {
+            textView.setSelectedRange(targetSelection)
         }
     }
 

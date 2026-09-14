@@ -595,7 +595,8 @@ struct NotesView: View {
 
     @ViewBuilder
     private var noteRecordingStatus: some View {
-        if appState.isRecording || appState.isTranscribing {
+        if (appState.isRecording || appState.isTranscribing),
+           appState.shouldShowNoteRecordingPreview {
             VStack(alignment: .leading, spacing: 8) {
                 Label(
                     appState.noteUpdateTargetID == nil
@@ -926,6 +927,8 @@ struct NotesView: View {
             importAttachment: { payload in importAttachment(payload, for: note) }
         )
         .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .layoutPriority(1)
         .id(note.id)
     }
 

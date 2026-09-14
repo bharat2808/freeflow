@@ -109,21 +109,31 @@ enum CommandInvocation: String, Sendable {
 
 enum SessionIntent {
     case dictation
+    case generate
     case command(invocation: CommandInvocation, selectedText: String)
 
     var isCommandMode: Bool {
         switch self {
         case .dictation:
             return false
+        case .generate:
+            return false
         case .command:
             return true
         }
+    }
+
+    var isGenerateMode: Bool {
+        if case .generate = self { return true }
+        return false
     }
 
     var persistedIntent: PipelineHistoryItemIntent {
         switch self {
         case .dictation:
             return .dictation
+        case .generate:
+            return .generate
         case .command(let invocation, _):
             switch invocation {
             case .automatic:
@@ -136,7 +146,7 @@ enum SessionIntent {
 
     var persistedSelectedText: String? {
         switch self {
-        case .dictation:
+        case .dictation, .generate:
             return nil
         case .command(_, let selectedText):
             return selectedText
@@ -153,6 +163,9 @@ enum SessionIntent {
     }
 
     static func fromPersisted(intent: PipelineHistoryItemIntent, selectedText: String?) -> SessionIntent {
+        if intent == .generate {
+            return .generate
+        }
         if intent == .commandAutomatic, let selectedText {
             return .command(invocation: .automatic, selectedText: selectedText)
         }

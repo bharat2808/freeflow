@@ -114,6 +114,7 @@ extension AppState {
         contextCaptureTask = nil
         capturedContext = nil
         currentSessionIntent = .dictation
+        activeGenerationNoteContext = nil
         noteUpdateTargetID = nil
         noteVoiceAction = nil
         liveNoteTranscript = ""
@@ -279,7 +280,7 @@ extension AppState {
         scheduleReadyStatusReset(after: 2, matching: ["Fix Edit Mode modifier"])
     }
 
-    private func startRecording(triggerMode: RecordingTriggerMode) {
+    func startRecording(triggerMode: RecordingTriggerMode) {
         let t0 = CFAbsoluteTimeGetCurrent()
         os_log(.info, log: recordingSessionLog, "startRecording() entered")
         guard !isRecording && !isTranscribing else { return }
@@ -288,6 +289,10 @@ extension AppState {
         liveNoteTranscript = ""
         let scheduledSelectionSnapshot = pendingSelectionSnapshot
         let scheduledManualCommandInvocation = pendingManualCommandInvocation
+        let scheduledGeneration = pendingGeneration
+        let scheduledGenerationNoteContext = scheduledGeneration
+            ? selectedNoteContextForGeneration()
+            : nil
         cancelPendingShortcutStart()
         guard prepareRecordingStart(
             triggerMode: triggerMode,
@@ -295,9 +300,12 @@ extension AppState {
             manualCommandRequested: scheduledSelectionSnapshot == nil
                 ? hotkeyManager.currentPressedModifiers.contains(commandModeManualModifier.shortcutModifier)
                 : scheduledManualCommandInvocation,
+            generationRequested: scheduledGeneration,
             startedAt: t0
         ) else {
             activeNoteRecording = false
+            pendingGeneration = false
+            activeGenerationNoteContext = nil
             noteUpdateTargetID = nil
             noteVoiceAction = nil
             return
@@ -307,9 +315,11 @@ extension AppState {
             noteVoiceAction = nil
             if !isAwaitingMicrophonePermission {
                 activeNoteRecording = false
+                activeGenerationNoteContext = nil
             }
             return
         }
+        activeGenerationNoteContext = scheduledGenerationNoteContext
         os_log(.info, log: recordingSessionLog, "mic access check passed: %.3fms", (CFAbsoluteTimeGetCurrent() - t0) * 1000)
         applyAudioInterruptionIfNeeded()
         beginRecording(triggerMode: triggerMode)
@@ -320,6 +330,7 @@ extension AppState {
         triggerMode: RecordingTriggerMode,
         selectionSnapshot: AppSelectionSnapshot? = nil,
         manualCommandRequested: Bool? = nil,
+        generationRequested: Bool = false,
         startedAt: CFAbsoluteTime? = nil
     ) -> Bool {
         activeRecordingTriggerMode = triggerMode
@@ -349,22 +360,31 @@ extension AppState {
             // capture at all.
             resolvedIntent = .dictation
         } else {
-            let selectionSnapshot = selectionSnapshot ?? contextService.collectSelectionSnapshot()
-            let manualCommandRequested = manualCommandRequested
-                ?? hotkeyManager.currentPressedModifiers.contains(commandModeManualModifier.shortcutModifier)
-            guard let intent = resolveSessionIntent(
-                triggerMode: triggerMode,
-                selectionSnapshot: selectionSnapshot,
-                manualCommandRequested: manualCommandRequested
-            ) else {
-                noteUpdateTargetID = nil
-                noteVoiceAction = nil
-                return false
+            if generationRequested {
+                resolvedIntent = .generate
+            } else {
+                let selectionSnapshot = selectionSnapshot ?? contextService.collectSelectionSnapshot()
+                let manualCommandRequested = manualCommandRequested
+                    ?? hotkeyManager.currentPressedModifiers.contains(commandModeManualModifier.shortcutModifier)
+                guard let intent = resolveSessionIntent(
+                    triggerMode: triggerMode,
+                    selectionSnapshot: selectionSnapshot,
+                    manualCommandRequested: manualCommandRequested
+                ) else {
+                    noteUpdateTargetID = nil
+                    noteVoiceAction = nil
+                    return false
+                }
+                resolvedIntent = intent
             }
-            resolvedIntent = intent
         }
 
         if resolvedIntent.isCommandMode {
+            guard ensureScreenCaptureAccess() else { return false }
+            if let startedAt {
+                os_log(.info, log: recordingSessionLog, "screen capture check passed: %.3fms", (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
+            }
+        } else if resolvedIntent.isGenerateMode {
             guard ensureScreenCaptureAccess() else { return false }
             if let startedAt {
                 os_log(.info, log: recordingSessionLog, "screen capture check passed: %.3fms", (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
@@ -634,6 +654,8 @@ extension AppState {
         }
         activeRecordingTriggerMode = nil
         currentSessionIntent = .dictation
+        pendingGeneration = false
+        activeGenerationNoteContext = nil
         noteUpdateTargetID = nil
         noteVoiceAction = nil
         liveNoteTranscript = ""

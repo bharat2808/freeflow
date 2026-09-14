@@ -10,6 +10,15 @@ private let contextCaptureLog = OSLog(
 )
 
 extension AppState {
+    func selectedNoteContextForGeneration() -> NoteGenerationContext? {
+        guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier,
+              let selectedID = notesLibrary.selectedID,
+              let note = notesLibrary.notes.first(where: { $0.id == selectedID }) else {
+            return nil
+        }
+        return NoteGenerationContext(note: note)
+    }
+
     func startRealtimeStreamingIfEnabled() {
         if transcriptionEngine == .localWhisper {
             do {
