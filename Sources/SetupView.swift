@@ -1092,7 +1092,7 @@ struct SetupView: View {
         case .accessibility:
             return accessibilityGranted
         case .screenRecording:
-            return appState.hasScreenRecordingPermission
+            return true
         case .testTranscription:
             return testPhase == .done && !testTranscript.isEmpty && testError == nil
         default:

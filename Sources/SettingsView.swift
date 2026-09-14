@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import AVFoundation
 import ServiceManagement
 
@@ -56,6 +57,9 @@ struct ProviderSettingsFields: View {
     @State private var postProcessingModelDraft: String = ""
     @State private var postProcessingFallbackModelDraft: String = ""
     @State private var contextModelDraft: String = ""
+    @State private var isDownloadingLocalWhisperModel = false
+    @State private var localWhisperDownloadProgress = 0.0
+    @State private var localWhisperDownloadError: String?
     /// Updated by the cooldown timer so warning labels clear at expiry without user interaction.
     @State private var now: Date = Date()
     /// Tracks whether the Settings window is the frontmost active window.
@@ -75,6 +79,59 @@ struct ProviderSettingsFields: View {
         transcriptionModelDraft = trimmed
         guard appState.transcriptionModel != trimmed else { return }
         appState.transcriptionModel = trimmed
+    }
+
+    private func commitLocalWhisperExecutablePath() {
+        appState.localWhisperExecutablePath = appState.localWhisperExecutablePath.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func commitLocalWhisperModelPath() {
+        appState.localWhisperModelPath = appState.localWhisperModelPath.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func chooseLocalWhisperFile(model: Bool) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+        if model {
+            panel.message = "Choose a local Whisper model file (.bin or .gguf)."
+        } else {
+            panel.message = "Choose the whisper-cli executable."
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if model {
+            appState.localWhisperModelPath = url.path
+        } else {
+            appState.localWhisperExecutablePath = url.path
+        }
+    }
+
+    private func downloadBaseLocalWhisperModel() {
+        guard !isDownloadingLocalWhisperModel else { return }
+        isDownloadingLocalWhisperModel = true
+        localWhisperDownloadProgress = 0
+        localWhisperDownloadError = nil
+        Task {
+            do {
+                let url = try await LocalWhisperModelDownloader.downloadBaseEnglishModel { progress in
+                    Task { @MainActor in
+                        localWhisperDownloadProgress = progress
+                    }
+                }
+                await MainActor.run {
+                    appState.localWhisperModelPath = url.path
+                    localWhisperDownloadProgress = 1
+                    isDownloadingLocalWhisperModel = false
+                }
+            } catch {
+                await MainActor.run {
+                    localWhisperDownloadError = "Could not download the Whisper model: \(error.localizedDescription)"
+                    isDownloadingLocalWhisperModel = false
+                }
+            }
+        }
     }
 
     private func commitRealtimeStreamingModel() {
@@ -262,6 +319,78 @@ struct ProviderSettingsFields: View {
                 }
             )
 
+            Picker("Transcription Engine", selection: $appState.transcriptionEngine) {
+                ForEach(TranscriptionEngine.allCases) { engine in
+                    Text(engine.title).tag(engine)
+                }
+            }
+            .pickerStyle(.menu)
+
+            if appState.transcriptionEngine == .localWhisper {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Local Whisper configuration")
+                        .font(.caption.weight(.semibold))
+                    Text("Runs whisper.cpp on this Mac. Install or build whisper-cli with Metal support, then select the executable and a downloaded GGML/GGUF model.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    HStack(spacing: 8) {
+                        TextField("whisper-cli path (blank auto-detects)", text: $appState.localWhisperExecutablePath)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.body, design: .monospaced))
+                            .onSubmit { commitLocalWhisperExecutablePath() }
+                        Button("Choose…") { chooseLocalWhisperFile(model: false) }
+                            .font(.caption)
+                    }
+
+                    HStack(spacing: 8) {
+                        TextField("Whisper model path (.bin or .gguf)", text: $appState.localWhisperModelPath)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.body, design: .monospaced))
+                            .onSubmit { commitLocalWhisperModelPath() }
+                        Button("Choose…") { chooseLocalWhisperFile(model: true) }
+                            .font(.caption)
+                    }
+
+                    HStack(spacing: 10) {
+                        Button {
+                            downloadBaseLocalWhisperModel()
+                        } label: {
+                            Label(
+                                isDownloadingLocalWhisperModel
+                                    ? "Downloading \(Int(localWhisperDownloadProgress * 100))%"
+                                    : (FileManager.default.fileExists(
+                                        atPath: LocalWhisperModelDownloader.baseEnglishModelPath.path
+                                    ) ? "Downloaded" : "Download base.en model"),
+                                systemImage: isDownloadingLocalWhisperModel
+                                    ? "arrow.down.circle"
+                                    : (FileManager.default.fileExists(
+                                        atPath: LocalWhisperModelDownloader.baseEnglishModelPath.path
+                                    ) ? "checkmark.circle.fill" : "arrow.down.circle")
+                            )
+                        }
+                        .disabled(isDownloadingLocalWhisperModel)
+                        if isDownloadingLocalWhisperModel {
+                            ProgressView(value: localWhisperDownloadProgress)
+                                .frame(width: 120)
+                        }
+                    }
+                    Text("Downloads the standard English model to ~/.cache/whisper (the download is about 142 MB).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let localWhisperDownloadError {
+                        Text(localWhisperDownloadError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+
+                    Text("Local transcription does not require a transcription API key. Post-processing still uses the configured LLM provider.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 4)
+            }
+
             VStack(alignment: .leading, spacing: 6) {
                 Text("Transcription Language")
                     .font(.caption.weight(.semibold))
@@ -335,6 +464,7 @@ struct ProviderSettingsFields: View {
                 "Stream audio while recording (realtime)",
                 isOn: $appState.realtimeStreamingEnabled
             )
+            .disabled(appState.transcriptionEngine == .localWhisper)
             Text("Streams audio through the provider's OpenAI-compatible /v1/realtime WebSocket so transcription runs while you speak.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -1519,6 +1649,7 @@ struct MicrophoneOptionRow: View {
 struct PromptsSettingsView: View {
     @EnvironmentObject var appState: AppState
     @State private var customSystemPromptInput: String = ""
+    @State private var noteSystemPromptInput: String = ""
     @State private var customContextPromptInput: String = ""
     @FocusState private var customSystemPromptFocused: Bool
     @FocusState private var customContextPromptFocused: Bool
@@ -1544,6 +1675,9 @@ struct PromptsSettingsView: View {
                 SettingsCard("System Prompt", icon: "text.bubble.fill") {
                     systemPromptSection
                 }
+                SettingsCard("Note-taking Prompt", icon: "note.text") {
+                    notePromptSection
+                }
                 SettingsCard("Instruction Guard", icon: "shield.lefthalf.filled") {
                     instructionGuardSection
                 }
@@ -1557,12 +1691,16 @@ struct PromptsSettingsView: View {
             customSystemPromptInput = appState.customSystemPrompt.isEmpty
                 ? PostProcessingService.defaultSystemPrompt
                 : appState.customSystemPrompt
+            noteSystemPromptInput = appState.noteSystemPrompt.isEmpty
+                ? MarkdownNoteStore.systemPrompt
+                : appState.noteSystemPrompt
             customContextPromptInput = appState.customContextPrompt.isEmpty
                 ? AppContextService.defaultContextPrompt
                 : appState.customContextPrompt
         }
         .onDisappear {
             commitCustomSystemPrompt()
+            commitNoteSystemPrompt()
             commitCustomContextPrompt()
         }
     }
@@ -1592,6 +1730,41 @@ struct PromptsSettingsView: View {
         } else if appState.customContextPrompt != trimmed {
             appState.customContextPrompt = trimmed
             appState.customContextPromptLastModified = iso8601DayFormatter.string(from: Date())
+        }
+    }
+
+    private func commitNoteSystemPrompt() {
+        let trimmed = noteSystemPromptInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let defaultTrimmed = MarkdownNoteStore.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        appState.noteSystemPrompt = trimmed == defaultTrimmed ? "" : trimmed
+    }
+
+    private var notePromptSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Controls how dictated speech is structured and saved as Markdown notes. For long recordings, this prompt is applied to each section and to the final merge.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextEditor(text: $noteSystemPromptInput)
+                .font(.system(.body, design: .monospaced))
+                .frame(minHeight: 140, maxHeight: 240)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                )
+
+            HStack {
+                Label(appState.noteSystemPrompt.isEmpty ? "Using default" : "Using custom prompt",
+                      systemImage: appState.noteSystemPrompt.isEmpty ? "checkmark.circle" : "pencil")
+                    .font(.caption)
+                    .foregroundStyle(appState.noteSystemPrompt.isEmpty ? Color.secondary : Color.blue)
+                Spacer()
+                Button("Reset to Default") {
+                    noteSystemPromptInput = MarkdownNoteStore.systemPrompt
+                    appState.noteSystemPrompt = ""
+                }
+                .font(.caption)
+            }
         }
     }
 

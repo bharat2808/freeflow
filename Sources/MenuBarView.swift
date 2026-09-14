@@ -48,6 +48,8 @@ struct MenuBarView: View {
 
     var body: some View {
         VStack(spacing: 4) {
+            Button("Open Notes") { NotificationCenter.default.post(name: .showNotes, object: nil) }
+
             Text("\(AppName.displayName) v\(appVersion)")
                 .font(.caption)
                 .foregroundStyle(.secondary)

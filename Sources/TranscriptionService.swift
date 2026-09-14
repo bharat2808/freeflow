@@ -3,7 +3,11 @@ import os.log
 
 private let transcriptionLog = OSLog(subsystem: "com.zachlatta.freeflow", category: "Transcription")
 
-class TranscriptionService {
+protocol AudioTranscriber {
+    func transcribe(fileURL: URL) async throws -> String
+}
+
+class TranscriptionService: AudioTranscriber {
     private static let modelsSupportingVerboseJSON: Set<String> = [
         // OpenAI's Whisper model supports segment metadata. The newer
         // gpt-4o-transcribe family only supports the plain JSON format.
@@ -18,19 +22,21 @@ class TranscriptionService {
     private let baseURL: URL
     private let transcriptionModel: String
     private let language: String?
+    private let timeoutSecondsOverride: TimeInterval?
     private var transcriptionResponseFormat: String {
         Self.responseFormat(forModel: transcriptionModel)
     }
     private var transcriptionTimeoutSeconds: TimeInterval {
         let override = UserDefaults.standard.double(forKey: "transcription_timeout_seconds")
-        return override > 0 ? override : 20
+        return timeoutSecondsOverride ?? (override > 0 ? override : 20)
     }
 
     init(
         apiKey: String,
         baseURL: String = "https://api.groq.com/openai/v1",
         transcriptionModel: String = "whisper-large-v3",
-        language: String? = nil
+        language: String? = nil,
+        timeoutSecondsOverride: TimeInterval? = nil
     ) throws {
         self.apiKey = apiKey
         self.baseURL = try Self.normalizedBaseURL(from: baseURL)
@@ -38,6 +44,7 @@ class TranscriptionService {
         self.transcriptionModel = trimmedModel.isEmpty ? "whisper-large-v3" : trimmedModel
         let trimmedLanguage = language?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.language = (trimmedLanguage?.isEmpty == false) ? trimmedLanguage : nil
+        self.timeoutSecondsOverride = timeoutSecondsOverride
     }
 
     static func responseFormat(forModel model: String) -> String {
@@ -170,10 +177,14 @@ class TranscriptionService {
                 fileSizeBytes(for: fileURL),
                 responseBody
             )
-            throw TranscriptionError.submissionFailed(Self.friendlyHTTPMessage(
+            let baseMessage = Self.friendlyHTTPMessage(
                 status: httpResponse.statusCode,
                 host: baseURL.host
-            ))
+            )
+            let providerDetail = Self.providerErrorDetail(from: responseBody)
+            let modelDetail = "Model: \(transcriptionModel)."
+            let detail = providerDetail.map { " \($0)" } ?? ""
+            throw TranscriptionError.submissionFailed("\(baseMessage)\(detail) \(modelDetail)")
         }
 
         return try parseTranscript(from: data)
@@ -257,6 +268,36 @@ class TranscriptionService {
         default:
             return "Request failed at \(provider) (HTTP \(status))."
         }
+    }
+
+    /// Extract a safe, short message from common OpenAI-compatible error payloads.
+    /// The API key is never included because only the response body is inspected.
+    private static func providerErrorDetail(from responseBody: String) -> String? {
+        guard !responseBody.isEmpty else { return nil }
+
+        if let data = responseBody.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let candidates: [String?] = [
+                (object["error"] as? [String: Any])?["message"] as? String,
+                object["message"] as? String,
+                object["error"] as? String
+            ]
+            if let message = candidates.compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) })
+                .first(where: { !$0.isEmpty }) {
+                return "Provider detail: \(shortenProviderDetail(message))"
+            }
+        }
+
+        let plainText = responseBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !plainText.isEmpty else { return nil }
+        return "Provider detail: \(shortenProviderDetail(plainText))"
+    }
+
+    private static func shortenProviderDetail(_ message: String) -> String {
+        let singleLine = message.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        let limit = 220
+        guard singleLine.count > limit else { return singleLine }
+        return String(singleLine.prefix(limit - 1)) + "…"
     }
 
     private static func transcriptionTimeoutErrorIfNeeded(

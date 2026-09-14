@@ -1,0 +1,707 @@
+import AppKit
+import SwiftUI
+import UniformTypeIdentifiers
+
+final class NotesLibrary: ObservableObject {
+    @Published var notes: [MarkdownNote] = []
+    @Published var selectedID: UUID?
+    @Published var error: String?
+    @Published private(set) var savedFolders: [String] = []
+    private let store = MarkdownNoteStore.standard
+    private let saveQueue = DispatchQueue(label: "freeflow.notes.save", qos: .utility)
+    private var pendingSaveWorkItems: [UUID: DispatchWorkItem] = [:]
+
+    init() { reload() }
+
+    deinit {
+        pendingSaveWorkItems.values.forEach { $0.cancel() }
+    }
+
+    func reload() {
+        do {
+            notes = try store.load()
+            savedFolders = store.loadFolders()
+            error = nil
+        }
+        catch { self.error = "Could not load notes: \(error.localizedDescription)" }
+    }
+
+    func createFolder(_ folder: String) {
+        do {
+            try store.createFolder(folder)
+            savedFolders = store.loadFolders()
+            error = nil
+        } catch {
+            self.error = "Could not create folder: \(error.localizedDescription)"
+        }
+    }
+
+    @discardableResult
+    func create(_ markdown: String) -> Bool {
+        let note = MarkdownNote(id: UUID(), markdown: markdown, modified: Date())
+        do {
+            try store.save(note)
+            notes.insert(note, at: 0)
+            selectedID = note.id
+            error = nil
+            return true
+        } catch {
+            self.error = "Could not save note: \(error.localizedDescription). The transcript is available in the run log."
+            return false
+        }
+    }
+
+    func edit(id: UUID, markdown: String) {
+        guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
+        notes[index].markdown = markdown
+        notes[index].modified = Date()
+        let note = notes[index]
+        pendingSaveWorkItems[id]?.cancel()
+        let store = self.store
+        var workItem: DispatchWorkItem!
+        workItem = DispatchWorkItem { [weak self] in
+            do {
+                try store.save(note)
+                DispatchQueue.main.async {
+                    guard let self, self.pendingSaveWorkItems[id] === workItem else { return }
+                    self.pendingSaveWorkItems[id] = nil
+                    self.error = nil
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    guard let self, self.pendingSaveWorkItems[id] === workItem else { return }
+                    self.pendingSaveWorkItems[id] = nil
+                    self.error = "Changes are not saved: \(error.localizedDescription)"
+                }
+            }
+        }
+        pendingSaveWorkItems[id] = workItem
+        saveQueue.asyncAfter(deadline: .now() + 0.25, execute: workItem)
+    }
+
+    @discardableResult
+    func update(id: UUID, markdown: String) -> Bool {
+        guard let index = notes.firstIndex(where: { $0.id == id }) else { return false }
+        let updated = MarkdownNote(
+            id: id,
+            markdown: markdown,
+            modified: Date(),
+            folder: notes[index].folder
+        )
+        pendingSaveWorkItems[id]?.cancel()
+        do {
+            try store.save(updated)
+            notes[index] = updated
+            error = nil
+            return true
+        } catch {
+            self.error = "Could not update note: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    var folders: [String] {
+        Array(Set(notes.map(\.folder)).union(savedFolders)).sorted { lhs, rhs in
+            if lhs.isEmpty { return true }
+            if rhs.isEmpty { return false }
+            return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        }
+    }
+
+    func moveSelected(to folder: String) {
+        guard let selectedID,
+              let index = notes.firstIndex(where: { $0.id == selectedID }) else { return }
+        let note = notes[index]
+        do {
+            // Flush a debounced editor save before changing the note's path.
+            // Otherwise the delayed write can recreate the old file after the
+            // move has completed.
+            try flushPendingSave(for: note)
+            notes[index] = try store.move(note, toFolder: folder)
+            notes.sort { $0.modified > $1.modified }
+            error = nil
+        } catch {
+            self.error = "Could not move note: \(error.localizedDescription)"
+        }
+    }
+
+    func deleteSelected() {
+        guard let selectedID,
+              let index = notes.firstIndex(where: { $0.id == selectedID }) else { return }
+        let note = notes[index]
+        pendingSaveWorkItems[selectedID]?.cancel()
+        pendingSaveWorkItems[selectedID] = nil
+        do {
+            try store.delete(note)
+            notes.remove(at: index)
+            self.selectedID = nil
+            error = nil
+        } catch {
+            self.error = "Could not delete note: \(error.localizedDescription)"
+        }
+    }
+
+    func renameFolder(from oldFolder: String, to newFolder: String) {
+        let oldValue = oldFolder.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newValue = newFolder.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !oldValue.isEmpty, !newValue.isEmpty, oldValue != newValue else { return }
+        do {
+            let affectedNotes = notes.filter {
+                $0.folder == oldValue || $0.folder.hasPrefix(oldValue + "/")
+            }
+            // Folder moves are path changes too. Persist the latest editor
+            // contents before the atomic directory rename.
+            for note in affectedNotes {
+                try flushPendingSave(for: note)
+            }
+            try store.renameFolder(from: oldValue, to: newValue)
+            reload()
+            selectedID = affectedNotes.first?.id
+        } catch {
+            self.error = "Could not rename folder: \(error.localizedDescription)"
+            reload()
+        }
+    }
+
+    private func flushPendingSave(for note: MarkdownNote) throws {
+        pendingSaveWorkItems[note.id]?.cancel()
+        pendingSaveWorkItems[note.id] = nil
+        try saveQueue.sync {
+            try store.save(note)
+        }
+    }
+
+    func revealFiles() { NSWorkspace.shared.open(store.directory) }
+}
+
+struct NotesView: View {
+    @EnvironmentObject var appState: AppState
+    @ObservedObject var library: NotesLibrary
+    @ObservedObject var searchState: NotesSearchState
+    @State private var preview = false
+    @State private var showMoveSheet = false
+    @State private var destinationFolder = ""
+    @State private var showCreateFolderSheet = false
+    @State private var newFolderName = ""
+    @State private var showRenameSheet = false
+    @State private var renameFolderName = ""
+    @State private var selectedFolderForRename: String?
+    @State private var showDeleteConfirmation = false
+    @State private var expandedFolders: Set<String> = []
+    @State private var collapsedFolders: Set<String> = []
+
+    init(library: NotesLibrary, searchState: NotesSearchState) {
+        self.library = library
+        self.searchState = searchState
+    }
+
+    private var selectedNoteFolder: String? {
+        guard let selectedID = library.selectedID else { return nil }
+        let folder = library.notes.first(where: { $0.id == selectedID })?.folder ?? ""
+        return folder.isEmpty ? nil : folder
+    }
+
+    private var sidebarFolders: [String] {
+        [""] + library.folders.filter { !$0.isEmpty }
+    }
+
+    private var search: String { searchState.text }
+
+    private func notes(in folder: String) -> [MarkdownNote] {
+        library.notes
+            .filter { note in
+                note.folder == folder
+                    && (search.isEmpty || note.markdown.localizedCaseInsensitiveContains(search))
+            }
+            .sorted { $0.modified > $1.modified }
+    }
+
+    private func dateGroups(for notes: [MarkdownNote]) -> [(String, [MarkdownNote])] {
+        let calendar = Calendar.current
+        let grouped = Dictionary(grouping: notes) { note in
+            calendar.startOfDay(for: note.modified)
+        }
+        return grouped.keys.sorted(by: >).map { date in
+            let title: String
+            if calendar.isDateInToday(date) {
+                title = "Today"
+            } else if calendar.isDateInYesterday(date) {
+                title = "Yesterday"
+            } else {
+                title = date.formatted(date: .abbreviated, time: .omitted)
+            }
+            return (title, grouped[date, default: []].sorted { $0.modified > $1.modified })
+        }
+    }
+
+    private func moveDroppedNote(from providers: [NSItemProvider], to folder: String) -> Bool {
+        guard let provider = providers.first else { return false }
+        provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let value = object as? NSString,
+                  let noteID = UUID(uuidString: value as String) else { return }
+            DispatchQueue.main.async {
+                library.selectedID = noteID
+                library.moveSelected(to: folder)
+            }
+        }
+        return true
+    }
+
+    private var liveTranscript: String {
+        let live = appState.liveNoteTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !live.isEmpty { return live }
+        return appState.lastRawTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        NavigationSplitView {
+            List(selection: $library.selectedID) {
+                Section {
+                    ForEach(sidebarFolders, id: \.self) { folder in
+                        folderRows(folder)
+                    }
+                } header: {
+                    HStack {
+                        Text("Notes")
+                        Spacer()
+                        Button { library.create("# Untitled note\n\n") } label: {
+                            Image(systemName: "note.text.badge.plus")
+                                .font(.title3)
+                                .frame(width: 34, height: 34)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("New note")
+                        Button {
+                            newFolderName = ""
+                            showCreateFolderSheet = true
+                        } label: {
+                            Image(systemName: "folder.badge.plus")
+                                .font(.title3)
+                                .frame(width: 34, height: 34)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("New folder")
+                    }
+                }
+            }
+            .contextMenu {
+                Button {
+                    library.create("# Untitled note\n\n")
+                } label: {
+                    Label("New note", systemImage: "square.and.pencil")
+                }
+                Button {
+                    newFolderName = ""
+                    showCreateFolderSheet = true
+                } label: {
+                    Label("New folder", systemImage: "folder.badge.plus")
+                }
+                Divider()
+                Button {
+                    library.reload()
+                } label: {
+                    Label("Refresh notes", systemImage: "arrow.clockwise")
+                }
+            }
+            .navigationTitle("Notes")
+            .navigationSplitViewColumnWidth(min: 220, ideal: 260)
+        } detail: {
+            VStack(alignment: .leading, spacing: 0) {
+                if let error = library.error ?? appState.errorMessage {
+                    Text(error).foregroundStyle(.red).padding()
+                }
+                if appState.isRecording || appState.isTranscribing {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(
+                            appState.noteUpdateTargetID == nil
+                                ? "Taking note"
+                                : (appState.noteVoiceAction == .append ? "Appending to note" : "Updating note"),
+                            systemImage: appState.isRecording ? "waveform" : "ellipsis.circle"
+                        )
+                        .font(.headline)
+                        .foregroundStyle(.tint)
+                        ScrollView {
+                            Text(liveTranscript.isEmpty ? "Listening…" : liveTranscript)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
+                        .frame(maxHeight: 150)
+                    }
+                    .padding(14)
+                    .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                    .padding(.horizontal, 18)
+                    .padding(.top, 12)
+                }
+                if let note = library.notes.first(where: { $0.id == library.selectedID }) {
+                    noteHeader(note)
+                    if preview {
+                        ScrollView {
+                            MarkdownPreview(markdown: note.markdown)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(28)
+                        }
+                    } else {
+                        TextEditor(text: Binding(get: {
+                            library.notes.first(where: { $0.id == note.id })?.markdown ?? ""
+                        }, set: { library.edit(id: note.id, markdown: $0) }))
+                        .font(.system(.body, design: .monospaced)).padding(18)
+                    }
+                } else {
+                    VStack(spacing: 14) {
+                        Image(systemName: "waveform").font(.system(size: 42)).foregroundStyle(.tint)
+                        Text("Speak your next note").font(.title)
+                        Text("Stop recording to turn your words into a saved Markdown note.")
+                            .foregroundStyle(.secondary)
+                    }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                Divider()
+                HStack {
+                    Circle().fill(appState.isRecording ? Color.red : Color.secondary).frame(width: 7, height: 7)
+                    Text(appState.statusText)
+                    Spacer()
+                    Text("Markdown · saved locally")
+                }.font(.caption).foregroundStyle(.secondary).padding(12)
+            }
+        }
+        .toolbar {
+            ToolbarItem {
+                Button { appState.toggleNoteRecording() } label: {
+                    Label(
+                        appState.isRecording ? "Stop & save" : "New note",
+                        systemImage: appState.isRecording ? "stop.circle.fill" : "waveform.badge.plus"
+                    )
+                    .labelStyle(.titleAndIcon)
+                }
+                .help(appState.isRecording ? "Stop and save note" : "Start a new voice note")
+                .disabled(appState.isTranscribing)
+            }
+        }
+        .confirmationDialog(
+            "Delete this note?",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                library.deleteSelected()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently deletes the Markdown file from your notes folder.")
+        }
+        .sheet(isPresented: $showMoveSheet) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Move note").font(.title2.weight(.semibold))
+                Text("Enter a folder name. Use a slash for nested folders, or leave it empty for Inbox.")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("Folder, e.g. Projects/Ideas", text: $destinationFolder)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Spacer()
+                    Button("Cancel") { showMoveSheet = false }
+                    Button("Move") {
+                        library.moveSelected(to: destinationFolder)
+                        showMoveSheet = false
+                    }.keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(24)
+            .frame(width: 420)
+        }
+        .sheet(isPresented: $showCreateFolderSheet) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("New folder").font(.title2.weight(.semibold))
+                Text("Use a slash for nested folders, such as Projects/Ideas.")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("Folder name", text: $newFolderName)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Spacer()
+                    Button("Cancel") { showCreateFolderSheet = false }
+                    Button("Create") {
+                        library.createFolder(newFolderName)
+                        showCreateFolderSheet = false
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(newFolderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding(24)
+            .frame(width: 420)
+        }
+        .sheet(isPresented: $showRenameSheet) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Rename folder").font(.title2.weight(.semibold))
+                Text("This renames the selected folder and keeps nested folders underneath it.")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("New folder name", text: $renameFolderName)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Spacer()
+                    Button("Cancel") { showRenameSheet = false }
+                    Button("Rename") {
+                        if let folder = selectedFolderForRename ?? selectedNoteFolder {
+                            library.renameFolder(from: folder, to: renameFolderName)
+                        }
+                        selectedFolderForRename = nil
+                        showRenameSheet = false
+                    }.keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(24)
+            .frame(width: 420)
+        }
+        .frame(minWidth: 800, minHeight: 520)
+    }
+
+    private func folderHeader(_ folder: String) -> some View {
+        let isCollapsed = collapsedFolders.contains(folder)
+        return HStack(spacing: 8) {
+            Button {
+                if isCollapsed {
+                    collapsedFolders.remove(folder)
+                } else {
+                    collapsedFolders.insert(folder)
+                }
+            } label: {
+                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                    .font(.caption.weight(.bold))
+                    .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.borderless)
+            .help(isCollapsed ? "Expand folder" : "Collapse folder")
+            Label(folder.isEmpty ? "Inbox" : folder, systemImage: folder.isEmpty ? "tray" : "folder")
+                .font(.headline)
+            Spacer(minLength: 4)
+            Text(String(notes(in: folder).count))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            if !folder.isEmpty {
+                Button {
+                    selectedFolderForRename = folder
+                    renameFolderName = folder
+                    showRenameSheet = true
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.body)
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.borderless)
+                .help("Rename folder")
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func noteHeader(_ note: MarkdownNote) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(note.title)
+                    .font(.title2.weight(.semibold))
+                    .lineLimit(1)
+                Text(note.modified, style: .date)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 12)
+            Button {
+                appState.startNoteUpdate(noteID: note.id)
+            } label: {
+                Label("Update", systemImage: "wand.and.stars")
+            }
+            .disabled(appState.isRecording || appState.isTranscribing)
+            Button {
+                appState.startNoteAppend(noteID: note.id)
+            } label: {
+                Label("Append", systemImage: "text.append")
+            }
+            .disabled(appState.isRecording || appState.isTranscribing)
+            Toggle(isOn: $preview) {
+                Label("Preview", systemImage: "eye")
+            }
+            .toggleStyle(.button)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background(.quaternary.opacity(0.35))
+    }
+
+    private func noteRow(_ note: MarkdownNote) -> some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(note.title).font(.headline).lineLimit(2)
+                Text(note.modified, style: .time)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 4)
+        }
+        .padding(.vertical, 5)
+        .contentShape(Rectangle())
+        .tag(note.id)
+        .draggable(note.id.uuidString) {
+            Label(note.title, systemImage: "note.text")
+                .padding(8)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        }
+        .contextMenu {
+            Button {
+                library.selectedID = note.id
+                destinationFolder = note.folder
+                showMoveSheet = true
+            } label: {
+                Label("Move note…", systemImage: "folder.badge.arrow.forward")
+            }
+            Button(role: .destructive) {
+                library.selectedID = note.id
+                showDeleteConfirmation = true
+            } label: {
+                Label("Delete note", systemImage: "trash")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func folderRows(_ folder: String) -> some View {
+        let folderNotes = notes(in: folder)
+        let isExpanded = expandedFolders.contains(folder)
+        let displayedFolderNotes = isExpanded ? folderNotes : Array(folderNotes.prefix(5))
+        Group {
+            folderHeader(folder)
+            if !collapsedFolders.contains(folder) {
+                dateGroupRows(folder: folder, folderNotes: displayedFolderNotes)
+                if folderNotes.count > 5 {
+                    Button(isExpanded ? "Show less" : "Show more") {
+                        if isExpanded {
+                            expandedFolders.remove(folder)
+                        } else {
+                            expandedFolders.insert(folder)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 22)
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .onDrop(of: [UTType.text.identifier], isTargeted: nil) { providers in
+            moveDroppedNote(from: providers, to: folder)
+        }
+    }
+
+    @ViewBuilder
+    private func dateGroupRows(folder: String, folderNotes: [MarkdownNote]) -> some View {
+        ForEach(dateGroups(for: folderNotes), id: \.0) { dateTitle, dateNotes in
+            Text(dateTitle)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 22)
+                .padding(.top, 8)
+            ForEach(dateNotes) { note in
+                noteRow(note)
+                    .padding(.leading, 22)
+            }
+        }
+    }
+}
+
+extension Notification.Name {
+    static let showNotes = Notification.Name("showNotes")
+}
+
+private struct MarkdownPreview: View {
+    let markdown: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(markdown.split(separator: "\n", omittingEmptySubsequences: false).enumerated()), id: \.offset) { _, line in
+                lineView(String(line))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func lineView(_ line: String) -> some View {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty {
+            Spacer().frame(height: 4)
+        } else if let heading = headingContent(from: trimmed) {
+            inlineText(heading.text)
+                .font(heading.font)
+                .padding(.top, 8)
+        } else if let bullet = listContent(from: trimmed) {
+            HStack(alignment: .top, spacing: 8) {
+                Text(bullet.marker).font(.body.weight(.semibold))
+                inlineText(bullet.text)
+            }
+            .padding(.leading, bullet.indent)
+        } else if trimmed.hasPrefix("> ") {
+            inlineText(String(trimmed.dropFirst(2)))
+                .italic()
+                .padding(.leading, 12)
+                .overlay(alignment: .leading) {
+                    Rectangle().fill(.secondary).frame(width: 3)
+                }
+        } else {
+            inlineText(trimmed)
+        }
+    }
+
+    private func headingContent(from line: String) -> (text: String, font: Font)? {
+        let hashes = line.prefix { $0 == "#" }
+        guard !hashes.isEmpty,
+              line.dropFirst(hashes.count).first == " " else { return nil }
+        let text = String(line.dropFirst(hashes.count)).trimmingCharacters(in: .whitespaces)
+        let font: Font
+        switch hashes.count {
+        case 1: font = .title2.weight(.bold)
+        case 2: font = .title3.weight(.bold)
+        default: font = .headline.weight(.semibold)
+        }
+        return (text, font)
+    }
+
+    private func listContent(from line: String) -> (marker: String, text: String, indent: CGFloat)? {
+        for marker in ["- ", "* ", "+ "] where line.hasPrefix(marker) {
+            return ("•", String(line.dropFirst(marker.count)), 0)
+        }
+        var digits = ""
+        for character in line {
+            guard character.isNumber else { break }
+            digits.append(character)
+        }
+        guard !digits.isEmpty, line.dropFirst(digits.count).hasPrefix(". ") else { return nil }
+        return (digits + ".", String(line.dropFirst(digits.count + 2)), 0)
+    }
+
+    private func inlineText(_ source: String) -> Text {
+        var result = Text("")
+        var remaining = source[...]
+        while !remaining.isEmpty {
+            let markers = ["**", "*", "`"]
+            guard let next = markers.compactMap({ marker in
+                remaining.range(of: marker).map { (range: $0, marker: marker) }
+            }).min(by: { $0.range.lowerBound < $1.range.lowerBound }) else {
+                result = result + Text(String(remaining))
+                break
+            }
+            if next.range.lowerBound > remaining.startIndex {
+                result = result + Text(String(remaining[..<next.range.lowerBound]))
+            }
+            let afterMarker = remaining[next.range.upperBound...]
+            guard let closing = afterMarker.range(of: next.marker) else {
+                result = result + Text(String(remaining[next.range.lowerBound...]))
+                break
+            }
+            let content = String(afterMarker[..<closing.lowerBound])
+            switch next.marker {
+            case "**": result = result + Text(content).bold()
+            case "*": result = result + Text(content).italic()
+            default: result = result + Text(content).font(.system(.body, design: .monospaced))
+            }
+            remaining = afterMarker[closing.upperBound...]
+        }
+        return result
+    }
+}
